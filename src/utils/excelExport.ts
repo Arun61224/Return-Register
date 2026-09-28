@@ -143,19 +143,42 @@ export function exportToExcel(
 }
 
 /**
- * Copies rows to clipboard with D and E joined as 'Part Code -- Year',
- * and Unit ('months' / 'year') column right before Qty.
+ * Copies rows to clipboard in the exact warehouse adjustment format.
  */
 export async function copyForExcelClipboard(rows: InventoryRow[]): Promise<boolean> {
   try {
-    const headers = ['S.No\tPrefix\tItem Code\tPart Code -- Year\tUnit\tQty\tBin No'];
-    const lines = rows.map((r, idx) => {
-      const fullCode = r.fullCode || `${r.prefix}-${r.itemCode}`;
-      const codeYear = `${fullCode}--${r.year}`;
-      const unit = r.ageType || getAgeUnit(r.year);
-      return `${idx + 1}\t${r.prefix}\t${r.itemCode}\t${codeYear}\t${unit}\t${r.quantity}\t${r.binNumber}`;
+    const headers = [
+      'Product Code*',
+      'Quantity*',
+      'Shelf Code*',
+      'Adjustment Type*',
+      'Inventory Type',
+      'Transfer to Shelf Code',
+      'Sla',
+      'Source Batch Code',
+      'Remarks',
+      'Force Allocate',
+    ].join('\t');
+
+    const lines = rows.map((r) => {
+      const productCode = formatProductCodeWithUnit(r);
+      const quantity = Number(r.quantity) || 1;
+      const shelfCode = formatShelfCode(r.binNumber);
+      return [
+        productCode,
+        quantity,
+        shelfCode,
+        '',
+        'Add',
+        '',
+        '',
+        '',
+        '',
+        '',
+      ].join('\t');
     });
-    const tsvContent = [...headers, ...lines].join('\n');
+
+    const tsvContent = [headers, ...lines].join('\n');
     await navigator.clipboard.writeText(tsvContent);
     return true;
   } catch (err) {
@@ -164,27 +187,95 @@ export async function copyForExcelClipboard(rows: InventoryRow[]): Promise<boole
   }
 }
 
+
 /**
- * Generates and downloads a CSV file with Unit ('months' / 'year') column right before Qty.
+ * Generates and downloads a CSV file with exact warehouse inventory adjustment format:
+ * Columns:
+ * Product Code* | Quantity* | Shelf Code* | Adjustment Type* | Inventory Type | Transfer to Shelf Code | Sla | Source Batch Code | Remarks | Force Allocate
+ *
+ * Rules:
+ * - Product Code*: e.g. PSUT-202--4-5-Years (or PSUT-202--6-12-Months)
+ * - Quantity*: row.quantity
+ * - Shelf Code*: 2770 -> U-2770 (adds 'U-' prefix if not already present)
+ * - Adjustment Type*: Add (or configured)
+ * - Inventory Type*: (or blank / standard as required)
+ * - Transfer to Shelf Code: ""
+ * - Sla: ""
+ * - Source Batch Code: ""
+ * - Remarks: ""
+ * - Force Allocate: ""
  */
-export function downloadCSV(rows: InventoryRow[], filename: string = 'inventory_slip.csv') {
-  const headers = ['S.No', 'Prefix', 'Item Code', 'Part Code -- Year', 'Unit', 'Qty', 'Bin No'];
-  const lines = rows.map((r, idx) => {
-    const fullCode = r.fullCode || `${r.prefix}-${r.itemCode}`;
-    const codeYear = `${fullCode}--${r.year}`;
-    const unit = r.ageType || getAgeUnit(r.year);
+export function formatProductCodeWithUnit(row: InventoryRow): string {
+  const prefix = row.prefix || 'TSUT';
+  const itemCode = row.itemCode || '';
+  const rawYear = String(row.year || '').trim();
+  const unit = (row.ageType || getAgeUnit(rawYear)).toLowerCase();
+  const unitSuffix = unit === 'months' ? 'Months' : 'Years';
+
+  // Capitalize format e.g. 4-5-Years or 0-3-Months
+  let yearPart = rawYear;
+  // If year doesn't end with Months/Years, format as {year}-{Years/Months}
+  if (!yearPart.toLowerCase().endsWith('years') && !yearPart.toLowerCase().endsWith('months')) {
+    yearPart = yearPart ? `${yearPart}-${unitSuffix}` : unitSuffix;
+  }
+
+  return `${prefix}-${itemCode}--${yearPart}`;
+}
+
+export function formatShelfCode(binNumber: string | undefined): string {
+  if (!binNumber) return 'U-';
+  const clean = String(binNumber).trim();
+  if (clean.toUpperCase().startsWith('U-')) {
+    return clean;
+  }
+  return `U-${clean}`;
+}
+
+export function downloadCSV(rows: InventoryRow[], filename: string = 'inventory_adjustment.csv') {
+  // Required exact headers
+  const headers = [
+    'Product Code*',
+    'Quantity*',
+    'Shelf Code*',
+    'Adjustment Type*',
+    'Inventory Type',
+    'Transfer to Shelf Code',
+    'Sla',
+    'Source Batch Code',
+    'Remarks',
+    'Force Allocate',
+  ];
+
+  const lines = rows.map((r) => {
+    const productCode = formatProductCodeWithUnit(r);
+    const quantity = Number(r.quantity) || 1;
+    const shelfCode = formatShelfCode(r.binNumber);
+    const adjustmentType = '';
+    const inventoryType = 'Add';
+    const transferToShelfCode = '';
+    const sla = '';
+    const sourceBatchCode = '';
+    const remarks = '';
+    const forceAllocate = '';
+
+    // CSV escape helper
+    const esc = (val: string | number) => `"${String(val).replace(/"/g, '""')}"`;
+
     return [
-      idx + 1,
-      `"${r.prefix}"`,
-      `"${r.itemCode}"`,
-      `"${codeYear}"`,
-      `"${unit}"`,
-      r.quantity,
-      `"${r.binNumber}"`,
+      esc(productCode),
+      quantity,
+      esc(shelfCode),
+      esc(adjustmentType),
+      esc(inventoryType),
+      esc(transferToShelfCode),
+      esc(sla),
+      esc(sourceBatchCode),
+      esc(remarks),
+      esc(forceAllocate),
     ].join(',');
   });
 
-  const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...lines].join('\n');
+  const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...lines].join('\n');
   const encodedUri = encodeURI(csvContent);
   const link = document.createElement('a');
   link.setAttribute('href', encodedUri);
@@ -193,3 +284,4 @@ export function downloadCSV(rows: InventoryRow[], filename: string = 'inventory_
   link.click();
   document.body.removeChild(link);
 }
+

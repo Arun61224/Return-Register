@@ -17,6 +17,8 @@ import {
   Crop,
   FileX,
   Plus,
+  Layers,
+  Images,
 } from 'lucide-react';
 
 import { InventoryRow, DuplicateWarning, SlipExtractionResult, SectionSummary } from './types/inventory';
@@ -36,9 +38,12 @@ export default function App() {
   const [detectedPrefix, setDetectedPrefix] = useState<string>('TSUT / PSUT');
   const [detectedBin, setDetectedBin] = useState<string>('2162 / 2352 / 2342 / 2300');
   const [currentImage, setCurrentImage] = useState<string | null>(null);
+  const [uploadedImagesCount, setUploadedImagesCount] = useState<number>(1);
+  const [isAppendMode, setIsAppendMode] = useState<boolean>(true);
 
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [loadingStep, setLoadingStep] = useState<string>('');
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [copySuccess, setCopySuccess] = useState<boolean>(false);
 
@@ -55,6 +60,7 @@ export default function App() {
   const [filterDuplicateOnly, setFilterDuplicateOnly] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const multiFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Load sample slip automatically on mount (now preloaded with full 4-section data)
   useEffect(() => {
@@ -150,68 +156,60 @@ export default function App() {
     }
   };
 
-  // Process Slip Image via server-side Gemini 3.8 Flash
+  // Process a single slip image
+  const extractSingleSlip = async (base64Image: string): Promise<SlipExtractionResult> => {
+    const optimizedBase64 = await compressImageForUpload(base64Image, 1600, 0.88);
+    const response = await fetch('/api/extract-slip', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        imageBase64: optimizedBase64,
+        defaultPrefix: 'TSUT',
+      }),
+    });
+
+    const responseText = await response.text();
+    let json: any = null;
+    try {
+      json = JSON.parse(responseText);
+    } catch (_parseErr) {
+      if (response.status === 413 || responseText.includes('Payload Too Large')) {
+        throw new Error('Image size is too large for the mobile network. Please use Crop to select the slip.');
+      }
+      throw new Error(`Server returned status ${response.status}`);
+    }
+
+    if (!response.ok || !json?.success) {
+      let rawError = json?.error || `Failed to process slip image (HTTP ${response.status}).`;
+      try {
+        const parsed = JSON.parse(rawError);
+        if (parsed?.error?.message) rawError = parsed.error.message;
+        else if (parsed?.message) rawError = parsed.message;
+      } catch (_e) {}
+      throw new Error(rawError);
+    }
+
+    return json.data;
+  };
+
+  // Process Slip Image (Single)
   const processSlipImage = async (base64Image: string) => {
     setIsLoading(true);
     setErrorMessage(null);
+    setBatchProgress(null);
     setLoadingStep('Optimizing photo for mobile scanning...');
 
     try {
-      // Step 1: Optimize and compress image (prevents Vercel 4.5MB payload limit & Safari memory issues)
-      const optimizedBase64 = await compressImageForUpload(base64Image, 1600, 0.88);
-
-      setLoadingStep('Detecting page quadrants & handwritten sections...');
-      setTimeout(() => setLoadingStep('Extracting Section 1 (Top-Left) & Section 2 (Top-Right)...'), 1500);
-      setTimeout(() => setLoadingStep('Extracting Section 3 (Bottom-Left) & Section 4 (Bottom-Right)...'), 3000);
-      setTimeout(() => setLoadingStep('Reading bin numbers [2162], [2352], [2342], [2300]...'), 4500);
-
-      const response = await fetch('/api/extract-slip', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          imageBase64: optimizedBase64,
-          defaultPrefix: 'TSUT',
-        }),
-      });
-
-      // Defensively parse text to avoid Safari "The string did not match the expected pattern" error
-      const responseText = await response.text();
-      let json: any = null;
-
-      try {
-        json = JSON.parse(responseText);
-      } catch (_parseErr) {
-        console.error('Non-JSON response received from /api/extract-slip:', responseText.slice(0, 300));
-        if (response.status === 413 || responseText.includes('Payload Too Large')) {
-          throw new Error('Image size is too large for the mobile network. Please use the Crop button to select just the slip area.');
-        }
-        if (responseText.includes('<!DOCTYPE') || responseText.includes('<html')) {
-          throw new Error('Backend API returned HTML instead of JSON. If deployed on Vercel, please make sure GEMINI_API_KEY environment variable is configured in Vercel settings.');
-        }
-        throw new Error(`Server returned status ${response.status}: ${responseText.slice(0, 100)}`);
-      }
-
-      if (!response.ok || !json?.success) {
-        let rawError = json?.error || `Failed to process slip image (HTTP ${response.status}).`;
-        try {
-          const parsed = JSON.parse(rawError);
-          if (parsed?.error?.message) {
-            rawError = parsed.error.message;
-          } else if (parsed?.message) {
-            rawError = parsed.message;
-          }
-        } catch (_e) {}
-        throw new Error(rawError);
-      }
-
-      applyExtractionResult(json.data, optimizedBase64);
+      setLoadingStep('Detecting notebook quadrants & handwritten lines...');
+      const data = await extractSingleSlip(base64Image);
+      applyExtractionResult(data, base64Image, false);
     } catch (err: any) {
       console.error('OCR Error:', err);
-      let displayError = err?.message || 'Error scanning image. Please make sure the photo is clear or use the sample.';
+      let displayError = err?.message || 'Error scanning image. Please make sure the photo is clear.';
       if (displayError.includes('high demand') || displayError.includes('503') || displayError.includes('UNAVAILABLE')) {
-        displayError = 'Google AI server par temporary high demand hai. Kripya 5-10 second baad dobara "Capture Photo" dabayein.';
+        displayError = 'Google AI server par temporary high demand hai. Kripya 5-10 second baad dobara koshish karein.';
       }
       setErrorMessage(displayError);
     } finally {
@@ -220,16 +218,111 @@ export default function App() {
     }
   };
 
-  const applyExtractionResult = (data: SlipExtractionResult, imageBase64: string | null) => {
+  // Process Multiple Images in Batch
+  const processMultipleImages = async (files: File[]) => {
+    if (files.length === 0) return;
+    setIsLoading(true);
+    setErrorMessage(null);
+    setUploadedImagesCount(files.length);
+
+    const total = files.length;
+    let successfulCount = 0;
+    const combinedRows: InventoryRow[] = isAppendMode ? [...rows] : [];
+    const combinedSections: SectionSummary[] = isAppendMode ? [...sections] : [];
+    let lastValidImage: string | null = null;
+    let detectedPrefixes = new Set<string>();
+    let detectedBins = new Set<string>();
+
+    for (let i = 0; i < total; i++) {
+      const file = files[i];
+      setBatchProgress({ current: i + 1, total });
+      setLoadingStep(`Processing Slip ${i + 1} of ${total} (${file.name})...`);
+
+      try {
+        const compressedBase64 = await compressImageForUpload(file, 1600, 0.88);
+        lastValidImage = compressedBase64;
+        const result = await extractSingleSlip(compressedBase64);
+
+        if (result.detectedPrefix) detectedPrefixes.add(result.detectedPrefix);
+        if (result.detectedBinNumber) detectedBins.add(result.detectedBinNumber);
+
+        // Format and append rows with unique IDs and continuous row numbering
+        const startingRowNum = combinedRows.length;
+        const slipRows: InventoryRow[] = (result.rows || []).map((row, idx) => {
+          const yearStr = String(row.year || '');
+          const rowNumber = startingRowNum + idx + 1;
+          return {
+            id: `batch-${i + 1}-${Date.now()}-${idx + 1}`,
+            rowNumber,
+            sectionIndex: row.sectionIndex || 1,
+            sectionName: `Slip ${i + 1} - Sec ${row.sectionIndex || 1}`,
+            rawText: row.rawText || '',
+            prefix: row.prefix || 'TSUT',
+            itemCode: String(row.itemCode || ''),
+            fullCode: row.fullCode || `${row.prefix || 'TSUT'}-${row.itemCode}`,
+            year: yearStr,
+            ageType: row.ageType || getAgeUnit(yearStr),
+            quantity: Number(row.quantity) || 1,
+            binNumber: String(row.binNumber || ''),
+            isCarryForward: Boolean(row.isCarryForward),
+            carryForwardFrom: row.carryForwardFrom || '',
+            isDuplicate: false,
+          };
+        });
+
+        combinedRows.push(...slipRows);
+
+        // Collect sections
+        if (result.sections) {
+          result.sections.forEach((sec) => {
+            combinedSections.push({
+              ...sec,
+              title: `Slip ${i + 1} - ${sec.title}`,
+            });
+          });
+        }
+
+        successfulCount++;
+      } catch (err: any) {
+        console.error(`Failed to process image ${i + 1}:`, err);
+        setErrorMessage(`Slip ${i + 1} (${file.name}) process karte samay issue aaya: ${err?.message || 'Error'}`);
+      }
+    }
+
+    if (combinedRows.length > 0) {
+      setRows(combinedRows);
+      if (detectedPrefixes.size > 0) {
+        setDetectedPrefix(Array.from(detectedPrefixes).join(' / '));
+      }
+      if (detectedBins.size > 0) {
+        setDetectedBin(Array.from(detectedBins).join(' / '));
+      }
+      if (lastValidImage) {
+        setCurrentImage(lastValidImage);
+      }
+      recalculateDuplicates(combinedRows);
+    }
+
+    setIsLoading(false);
+    setLoadingStep('');
+    setBatchProgress(null);
+  };
+
+  const applyExtractionResult = (
+    data: SlipExtractionResult,
+    imageBase64: string | null,
+    append: boolean = false
+  ) => {
     setDetectedPrefix(data.detectedPrefix || 'TSUT / PSUT');
     setDetectedBin(data.detectedBinNumber || '2162 / 2352 / 2342 / 2300');
-    setCurrentImage(imageBase64);
+    if (imageBase64) setCurrentImage(imageBase64);
 
+    const baseRowNumber = append ? rows.length : 0;
     const formattedRows: InventoryRow[] = (data.rows || []).map((row, idx) => {
       const yearStr = String(row.year || '');
       return {
-        id: row.id || `row-${Date.now()}-${idx + 1}`,
-        rowNumber: idx + 1,
+        id: row.id || `row-${Date.now()}-${baseRowNumber + idx + 1}`,
+        rowNumber: baseRowNumber + idx + 1,
         sectionIndex: row.sectionIndex || 1,
         sectionName: row.sectionName || `Sec ${row.sectionIndex || 1}`,
         rawText: row.rawText || '',
@@ -246,14 +339,15 @@ export default function App() {
       };
     });
 
-    setRows(formattedRows);
+    const finalRows = append ? [...rows, ...formattedRows] : formattedRows;
+    setRows(finalRows);
 
     // Compute dynamic section breakdown if not present
     if (data.sections && data.sections.length > 0) {
-      setSections(data.sections);
+      setSections(append ? [...sections, ...data.sections] : data.sections);
     } else {
       const secMap = new Map<number, { prefix: string; bin: string; count: number; qty: number }>();
-      formattedRows.forEach((r) => {
+      finalRows.forEach((r) => {
         const sIdx = r.sectionIndex || 1;
         if (!secMap.has(sIdx)) {
           secMap.set(sIdx, { prefix: r.prefix, bin: r.binNumber, count: 0, qty: 0 });
@@ -274,7 +368,23 @@ export default function App() {
       setSections(computedSections);
     }
 
-    recalculateDuplicates(formattedRows);
+    recalculateDuplicates(finalRows);
+  };
+
+  const handleMultipleFilesUpload = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    const files = Array.from(fileList).filter((f) => f.type.startsWith('image/'));
+
+    if (files.length === 0) {
+      setErrorMessage('Please select valid image files (JPG, PNG, JPEG).');
+      return;
+    }
+
+    if (files.length === 1) {
+      handleFileUpload(files[0]);
+    } else {
+      await processMultipleImages(files);
+    }
   };
 
   const handleFileUpload = async (file: File) => {
@@ -514,10 +624,11 @@ export default function App() {
               <span>Capture Photo</span>
             </button>
 
+            {/* Single Slip Upload */}
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className={`px-3.5 py-2 text-xs font-medium rounded-lg flex items-center gap-1.5 border transition cursor-pointer shadow-xs ${
+              className={`px-3 py-2 text-xs font-medium rounded-lg flex items-center gap-1.5 border transition cursor-pointer shadow-xs ${
                 isDarkMode
                   ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
                   : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-300'
@@ -525,6 +636,21 @@ export default function App() {
             >
               <Upload className="w-4 h-4 text-slate-500" />
               <span>Upload Slip</span>
+            </button>
+
+            {/* Multiple Slips (Batch) Upload */}
+            <button
+              type="button"
+              onClick={() => multiFileInputRef.current?.click()}
+              title="Upload multiple slip photos at once to merge into one Excel"
+              className={`px-3 py-2 text-xs font-semibold rounded-lg flex items-center gap-1.5 border transition cursor-pointer shadow-xs ${
+                isDarkMode
+                  ? 'bg-indigo-950/60 hover:bg-indigo-900/60 text-indigo-300 border-indigo-700/60'
+                  : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
+              }`}
+            >
+              <Images className="w-4 h-4 text-indigo-500" />
+              <span>Multiple Slips</span>
             </button>
 
             <input
@@ -535,6 +661,21 @@ export default function App() {
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (file) handleFileUpload(file);
+                e.target.value = '';
+              }}
+            />
+
+            <input
+              ref={multiFileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  handleMultipleFilesUpload(e.target.files);
+                }
+                e.target.value = '';
               }}
             />
 
@@ -623,16 +764,35 @@ export default function App() {
       <main className="max-w-7xl mx-auto w-full px-4 lg:px-8 py-6 flex-1 flex flex-col gap-4">
         {/* Loading State Banner */}
         {isLoading && (
-          <div className={`border rounded-xl p-4 flex items-center gap-3 animate-pulse shadow-xs ${
+          <div className={`border rounded-xl p-4 flex flex-col gap-2 shadow-xs ${
             isDarkMode
               ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
               : 'bg-emerald-50 border-emerald-200 text-emerald-800'
           }`}>
-            <RefreshCw className="w-5 h-5 animate-spin text-emerald-600 shrink-0" />
-            <div>
-              <p className="text-sm font-semibold">Extracting Notebook Slip...</p>
-              <p className="text-xs opacity-80">{loadingStep}</p>
+            <div className="flex items-center gap-3">
+              <RefreshCw className="w-5 h-5 animate-spin text-emerald-600 shrink-0" />
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-semibold">
+                    {batchProgress ? `Extracting Slips (${batchProgress.current} / ${batchProgress.total})...` : 'Extracting Notebook Slip...'}
+                  </p>
+                  {batchProgress && (
+                    <span className="text-xs font-mono font-bold bg-emerald-600 text-white px-2 py-0.5 rounded-full">
+                      {Math.round((batchProgress.current / batchProgress.total) * 100)}%
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs opacity-80">{loadingStep}</p>
+              </div>
             </div>
+            {batchProgress && (
+              <div className="w-full bg-emerald-200/50 dark:bg-emerald-900/50 rounded-full h-1.5 overflow-hidden mt-1">
+                <div
+                  className="bg-emerald-600 h-1.5 rounded-full transition-all duration-300"
+                  style={{ width: `${(batchProgress.current / batchProgress.total) * 100}%` }}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -690,13 +850,32 @@ export default function App() {
                   placeholder="Search code, bin, year..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className={`pl-8 pr-3 py-1.5 text-xs rounded-lg border focus:outline-none focus:ring-2 focus:ring-emerald-500/20 w-52 shadow-xs transition ${
+                  className={`pl-8 pr-3 py-1.5 text-xs rounded-lg border focus:outline-none focus:ring-2 focus:ring-emerald-500/20 w-44 sm:w-52 shadow-xs transition ${
                     isDarkMode
                       ? 'bg-slate-900 border-slate-700 text-white placeholder-slate-500 focus:border-emerald-500'
                       : 'bg-white border-slate-200 text-slate-900 placeholder-slate-400 focus:border-emerald-500'
                   }`}
                 />
               </div>
+
+              {/* Mode Toggle: Append vs New Sheet */}
+              <button
+                type="button"
+                onClick={() => setIsAppendMode(!isAppendMode)}
+                title={isAppendMode ? 'Append Mode: Nayi photos ka data iske niche judega' : 'Replace Mode: Nayi photo lene par sheet reset hogi'}
+                className={`px-2.5 py-1 text-[11px] rounded-lg border flex items-center gap-1.5 transition cursor-pointer font-medium ${
+                  isAppendMode
+                    ? isDarkMode
+                      ? 'bg-emerald-950/60 text-emerald-300 border-emerald-700/50'
+                      : 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                    : isDarkMode
+                      ? 'bg-slate-800 text-slate-400 border-slate-700'
+                      : 'bg-slate-100 text-slate-600 border-slate-200'
+                }`}
+              >
+                <Layers className="w-3 h-3 text-emerald-500" />
+                <span>{isAppendMode ? 'Append Mode ON' : 'Replace Mode'}</span>
+              </button>
             </div>
 
             {/* Export, Add Row & Clear action buttons */}
@@ -741,25 +920,27 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleDownloadCSV}
-                className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border flex items-center gap-1.5 transition cursor-pointer shadow-xs ${
-                  isDarkMode
-                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
-                    : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
-                }`}
+                title="Download CSV in warehouse format (Product Code*, Quantity*, Shelf Code* U-, Adjustment Type*, etc.)"
+                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-sm hover:shadow transition active:scale-95 cursor-pointer"
               >
-                <FileText className="w-3.5 h-3.5 text-slate-400" />
-                <span>CSV</span>
+                <FileText className="w-3.5 h-3.5" />
+                <span>Download CSV</span>
               </button>
 
               <button
                 type="button"
                 onClick={handleExportExcel}
-                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-sm hover:shadow transition active:scale-95 cursor-pointer"
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg border flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs ${
+                  isDarkMode
+                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                    : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
+                }`}
                 title="Downloads clean Excel workbook (.xlsx)"
               >
-                <FileSpreadsheet className="w-3.5 h-3.5" />
-                <span>Export (.xlsx)</span>
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Excel (.xlsx)</span>
               </button>
+
 
               {rows.length > 0 && (
                 <button
@@ -790,25 +971,27 @@ export default function App() {
                   <th className="py-2.5 px-3 w-20">Section</th>
                   <th className="py-2.5 px-3 w-20">Prefix</th>
                   <th className="py-2.5 px-3 w-24">Item Code</th>
-                  <th className="py-2.5 px-3 w-48">
-                    Part Code -- Year
+                  <th className="py-2.5 px-3 w-56">
+                    Product Code*
                     <span className={`block text-[10px] font-normal normal-case ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>
-                      Joined with --
+                      e.g. PSUT-202--4-5-Years
                     </span>
                   </th>
-                  <th className="py-2.5 px-3 w-24 text-center">
+                  <th className="py-2.5 px-3 w-20 text-center">
                     Unit
                     <span className={`block text-[10px] font-normal normal-case ${isDarkMode ? 'text-amber-400' : 'text-amber-700'}`}>
-                      months / years
+                      Months / Years
                     </span>
                   </th>
                   <th className="py-2.5 px-3 w-24 text-center">
-                    Quantity
+                    Quantity*
                     <span className="block text-[10px] text-slate-400 font-normal normal-case">Pcs</span>
                   </th>
-                  <th className="py-2.5 px-3 w-24">
-                    Bin No
-                    <span className="block text-[10px] text-slate-400 font-normal normal-case">Shelf</span>
+                  <th className="py-2.5 px-3 w-28">
+                    Shelf Code*
+                    <span className={`block text-[10px] font-normal normal-case ${isDarkMode ? 'text-indigo-400' : 'text-indigo-600'}`}>
+                      U- + Bin
+                    </span>
                   </th>
                   <th className="py-2.5 px-3">Status / Origin</th>
                   <th className="py-2.5 px-3 w-16 text-center">Action</th>
@@ -855,6 +1038,18 @@ export default function App() {
                             >
                               <Upload className="w-4 h-4 text-slate-500" />
                               <span>Upload Slip</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => multiFileInputRef.current?.click()}
+                              className={`px-3.5 py-2 text-xs font-semibold rounded-lg border flex items-center gap-1.5 transition cursor-pointer shadow-xs ${
+                                isDarkMode
+                                  ? 'bg-indigo-950/60 text-indigo-300 border-indigo-700/60 hover:bg-indigo-900/60'
+                                  : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                              }`}
+                            >
+                              <Images className="w-4 h-4 text-indigo-500" />
+                              <span>Multiple Slips</span>
                             </button>
                             <button
                               type="button"
@@ -956,7 +1151,7 @@ export default function App() {
                           />
                         </td>
 
-                        {/* Part Code -- Year (Joined with --) */}
+                        {/* Product Code* (e.g. PSUT-202--4-5-Years) */}
                         <td className="py-2.5 px-3">
                           <div className="flex items-center gap-1.5 font-mono">
                             <span className={`font-bold text-xs whitespace-nowrap px-1.5 py-0.5 rounded border ${
@@ -964,13 +1159,13 @@ export default function App() {
                                 ? 'text-emerald-400 bg-emerald-950/30 border-emerald-800/40'
                                 : 'text-emerald-800 bg-emerald-50 border-emerald-200/80'
                             }`}>
-                              {row.fullCode || `${row.prefix}-${row.itemCode}`}--{row.year}
+                              {row.fullCode || `${row.prefix}-${row.itemCode}`}--{row.year ? `${row.year}-${currentUnit === 'months' ? 'Months' : 'Years'}` : currentUnit === 'months' ? 'Months' : 'Years'}
                             </span>
                             <span className={`text-[10px] font-normal ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
                               (
                               <input
                                 type="text"
-                                title="Edit Year"
+                                title="Edit Year / Age"
                                 value={row.year}
                                 onChange={(e) => updateRowField(row.id, 'year', e.target.value)}
                                 className={`w-10 px-1 py-0.5 rounded border text-center font-mono focus:outline-none ${
@@ -992,7 +1187,7 @@ export default function App() {
                               const nextUnit = currentUnit === 'months' ? 'years' : 'months';
                               updateRowField(row.id, 'ageType', nextUnit);
                             }}
-                            title="Click to toggle between months and years"
+                            title="Click to toggle between Months and Years"
                             className={`px-2 py-0.5 rounded text-[11px] font-bold font-mono tracking-wide border transition cursor-pointer shadow-2xs ${
                               currentUnit === 'months'
                                 ? isDarkMode
@@ -1003,11 +1198,11 @@ export default function App() {
                                   : 'bg-sky-50 text-sky-900 border-sky-300 hover:bg-sky-100'
                             }`}
                           >
-                            {currentUnit}
+                            {currentUnit === 'months' ? 'Months' : 'Years'}
                           </button>
                         </td>
 
-                        {/* Quantity */}
+                        {/* Quantity* */}
                         <td className="py-2.5 px-3 text-center">
                           <div className="flex items-center justify-center gap-1">
                             <button
@@ -1052,18 +1247,23 @@ export default function App() {
                           </div>
                         </td>
 
-                        {/* Bin No */}
+                        {/* Shelf Code* (e.g. U-2770) */}
                         <td className="py-2.5 px-3 font-bold">
-                          <input
-                            type="text"
-                            value={row.binNumber}
-                            onChange={(e) => updateRowField(row.id, 'binNumber', e.target.value)}
-                            className={`w-full px-1.5 py-1 rounded border border-transparent font-mono font-bold focus:outline-none transition ${
-                              isDarkMode
-                                ? 'text-indigo-300 hover:bg-slate-950/50 focus:bg-slate-950 focus:border-slate-700'
-                                : 'text-indigo-900 hover:bg-slate-100 focus:bg-white focus:border-slate-300 focus:shadow-xs'
-                            }`}
-                          />
+                          <div className="flex items-center gap-1">
+                            <span className={`text-xs font-mono font-bold ${isDarkMode ? 'text-indigo-400' : 'text-indigo-600'}`}>
+                              {row.binNumber?.toUpperCase().startsWith('U-') ? '' : 'U-'}
+                            </span>
+                            <input
+                              type="text"
+                              value={row.binNumber}
+                              onChange={(e) => updateRowField(row.id, 'binNumber', e.target.value)}
+                              className={`w-full px-1.5 py-1 rounded border border-transparent font-mono font-bold focus:outline-none transition ${
+                                isDarkMode
+                                  ? 'text-indigo-300 hover:bg-slate-950/50 focus:bg-slate-950 focus:border-slate-700'
+                                  : 'text-indigo-900 hover:bg-slate-100 focus:bg-white focus:border-slate-300 focus:shadow-xs'
+                              }`}
+                            />
+                          </div>
                         </td>
 
                         {/* Slip Status Badge / Carry forward indicator */}
