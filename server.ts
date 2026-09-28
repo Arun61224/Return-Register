@@ -215,10 +215,10 @@ app.post('/api/extract-slip', async (req: Request, res: Response) => {
       return;
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY;
     if (!apiKey) {
       res.status(500).json({
-        error: 'GEMINI_API_KEY is not configured on the server.',
+        error: 'GEMINI_API_KEY is not configured on the server. Please add GEMINI_API_KEY in your Vercel Project Settings > Environment Variables, or in your .env file.',
       });
       return;
     }
