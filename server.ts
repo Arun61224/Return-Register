@@ -46,6 +46,19 @@ function normalizePrefix(raw: string): string {
   if (/^ykt[\s\/\-_]?s?$/i.test(clean) || /yk\s*t[\s\-_]?sh[ir]*t/i.test(clean)) {
     return 'YKTs';
   }
+  // Match YK NSUT, YK-NSUT, YKNSUT
+  if (/^yk[\s\-_]?nsut$/i.test(clean)) {
+    return 'YK NSUT';
+  }
+  // Match YK PSUT, YK-PSUT, YKPSUT
+  if (/^yk[\s\-_]?psut$/i.test(clean)) {
+    return 'YK PSUT';
+  }
+  // Match YK TSUT, YK-TSUT, YKTSUT
+  if (/^yk[\s\-_]?tsut$/i.test(clean)) {
+    return 'YK TSUT';
+  }
+  if (/^nsut$/i.test(clean)) return 'NSUT';
   if (/^tsut$/i.test(clean)) return 'TSUT';
   if (/^psut$/i.test(clean)) return 'PSUT';
   return clean;
@@ -298,7 +311,8 @@ function findBestSkuMatches(
   itemCode: string,
   year: string,
   ageType: 'months' | 'years',
-  catalog: string[]
+  catalog: string[],
+  rawText?: string
 ): {
   matchedSku: string | null;
   candidates: string[];
@@ -315,31 +329,73 @@ function findBestSkuMatches(
     .trim()
     .toLowerCase();
 
-  // Normalize prefix variations for matching (e.g. Tshrt -> tshrt, tsut -> tsut, psut -> psut)
-  const normPrefix = prefix.toLowerCase();
-  const possiblePrefixes = [normPrefix];
-  if (normPrefix === 'tshrt' || normPrefix === 'ts') {
+  // Determine if this row has "YK" pattern in prefix, itemCode, or rawText
+  const prefixLower = prefix.toLowerCase();
+  const rawTextLower = String(rawText || '').toLowerCase();
+  const hasYkPattern =
+    prefixLower.includes('yk') ||
+    cleanItem.startsWith('yk') ||
+    /\byk\b/i.test(rawTextLower) ||
+    /yk[\s\/\-_]?/i.test(rawTextLower);
+
+  // Normalize prefix variations for matching
+  // (e.g. "YK NSUT" -> base garment "nsut", "YKTs" -> base garment "tshrt")
+  let garmentBase = prefixLower.replace(/^yk[\s\/\-_]?/i, '').trim();
+  const possiblePrefixes: string[] = [];
+
+  if (garmentBase === 'ts' || garmentBase === 'tshrt' || garmentBase === 't' || prefixLower === 'ykts') {
     possiblePrefixes.push('tshrt', 'ts');
-  } else if (normPrefix === 'tsut') {
+  } else if (garmentBase === 'tsut') {
     possiblePrefixes.push('tsut');
-  } else if (normPrefix === 'psut') {
+  } else if (garmentBase === 'psut') {
     possiblePrefixes.push('psut');
-  } else if (normPrefix === 'ykts') {
-    possiblePrefixes.push('ykts', 'ykt');
+  } else if (garmentBase === 'nsut') {
+    possiblePrefixes.push('nsut');
+  } else if (garmentBase === 'bsut') {
+    possiblePrefixes.push('bsut');
+  } else if (garmentBase === 'paj') {
+    possiblePrefixes.push('paj');
+  } else if (garmentBase === 'sht') {
+    possiblePrefixes.push('sht');
+  } else if (garmentBase) {
+    possiblePrefixes.push(garmentBase);
   }
 
   const isMonths = ageType === 'months';
 
-  const searchInCatalog = (targetYear: string, targetIsMonths: boolean) => {
+  /**
+   * Helper to search catalog with specific item code variation:
+   * e.g. for item 152:
+   * targetItemVariation = "yk152" (Priority 1 for YK slips)
+   * or "152" (Priority 2 / regular)
+   */
+  const searchInCatalogWithItem = (
+    targetItem: string,
+    targetYear: string,
+    targetIsMonths: boolean,
+    isYkItemSearch: boolean
+  ) => {
     const found: string[] = [];
     for (const sku of catalog) {
       const lowerSku = sku.toLowerCase();
 
       // Check item code
-      const itemMatch =
-        lowerSku.includes(`-${cleanItem}--`) ||
-        lowerSku.includes(`-${cleanItem}-`) ||
-        lowerSku.endsWith(`-${cleanItem}`);
+      let itemMatch = false;
+      if (isYkItemSearch) {
+        // Must match YK + itemCode e.g. "--yk152--" or "-yk152-" or "-yk152"
+        itemMatch =
+          lowerSku.includes(`--${targetItem}--`) ||
+          lowerSku.includes(`-${targetItem}--`) ||
+          lowerSku.includes(`-${targetItem}-`) ||
+          lowerSku.endsWith(`-${targetItem}`);
+      } else {
+        // Regular item code match e.g. "-152--" or "-152-"
+        itemMatch =
+          lowerSku.includes(`-${targetItem}--`) ||
+          lowerSku.includes(`-${targetItem}-`) ||
+          lowerSku.endsWith(`-${targetItem}`);
+      }
+
       if (!itemMatch) continue;
 
       // Check year part
@@ -358,19 +414,30 @@ function findBestSkuMatches(
 
       // Check garment prefix
       const prefixMatch = possiblePrefixes.some((p) => {
-        return lowerSku.includes(`-${p}-`) || lowerSku.includes(`-${p}--`);
+        return (
+          lowerSku.includes(`-${p}-`) ||
+          lowerSku.includes(`-${p}--`) ||
+          lowerSku.includes(`-${p}`) ||
+          lowerSku.startsWith(`${p}-`)
+        );
       });
 
-      if (prefixMatch) {
+      if (prefixMatch || possiblePrefixes.length === 0) {
         found.push(sku);
       }
     }
 
-    // Fallback: match without strict prefix if not found
+    // Fallback: match item code + year without strict garment prefix if not found
     if (found.length === 0 && targetYear) {
       for (const sku of catalog) {
         const lowerSku = sku.toLowerCase();
-        const itemMatch = lowerSku.includes(`-${cleanItem}--`) || lowerSku.includes(`-${cleanItem}-`);
+        let itemMatch = false;
+        if (isYkItemSearch) {
+          itemMatch = lowerSku.includes(`--${targetItem}--`) || lowerSku.includes(`-${targetItem}-`);
+        } else {
+          itemMatch = lowerSku.includes(`-${targetItem}--`) || lowerSku.includes(`-${targetItem}-`);
+        }
+
         if (itemMatch && (lowerSku.includes(targetYear) || lowerSku.includes(`--${targetYear}`))) {
           found.push(sku);
         }
@@ -380,31 +447,74 @@ function findBestSkuMatches(
     return found;
   };
 
-  // 1. Try EXACT match first
-  let matches = searchInCatalog(cleanYear, isMonths);
+  /**
+   * Search step that applies YK priority rules:
+   * If slip has YK pattern:
+   *   Step 1: Search using YK<itemCode> (e.g. "yk152") -> matches KYK-NSUT--YK152--9-10years
+   *   Step 2: If not found, search using <itemCode> (e.g. "152") -> matches KUC-NSUT-152--9-10years
+   * If slip does NOT have YK pattern:
+   *   Standard search with cleanItem.
+   */
+  const executeSearch = (targetYear: string, targetIsMonths: boolean) => {
+    if (hasYkPattern) {
+      const ykCodeItem = cleanItem.startsWith('yk') ? cleanItem : `yk${cleanItem}`;
+      // Priority 1: Search for YK + itemCode
+      const ykMatches = searchInCatalogWithItem(ykCodeItem, targetYear, targetIsMonths, true);
+      if (ykMatches.length > 0) {
+        return ykMatches;
+      }
+
+      // Priority 2: Fallback to item code without YK (e.g. NSUT-152)
+      const baseItemCode = cleanItem.replace(/^yk/i, '');
+      const fallbackMatches = searchInCatalogWithItem(baseItemCode, targetYear, targetIsMonths, false);
+      if (fallbackMatches.length > 0) {
+        return fallbackMatches;
+      }
+      return [];
+    }
+
+    // Regular non-YK search
+    return searchInCatalogWithItem(cleanItem, targetYear, targetIsMonths, false);
+  };
+
+  // 1. Try EXACT year match first
+  let matches = executeSearch(cleanYear, isMonths);
 
   if (matches.length > 0) {
     if (matches.length === 1) {
       return { matchedSku: matches[0], candidates: matches, status: 'matched' };
     }
-    const kucMatch = matches.find((m) => m.toUpperCase().startsWith('KUC-'));
+    // Prefer KYK- for YK patterns, otherwise prefer KUC-
+    const preferredMatch = hasYkPattern
+      ? matches.find((m) => m.toUpperCase().startsWith('KYK-') || m.toUpperCase().startsWith('DYK-'))
+      : matches.find((m) => m.toUpperCase().startsWith('KUC-'));
+
     return {
-      matchedSku: kucMatch || matches[0],
+      matchedSku: preferredMatch || matches[0],
       candidates: matches,
       status: 'multiple',
     };
   }
 
-  // 2. NEARBY AGE FALLBACK (As requested by user: 18-24m -> 12-18m -> 2-3y)
+  // 2. NEARBY AGE FALLBACK (Only for 0-24m / 1-2y)
   const nearbyList = AGE_NEAR_FALLBACKS[cleanYear] || [];
   for (const altAge of nearbyList) {
-    const isAltMonths = altAge.includes('months') || altAge === '18-24' || altAge === '12-18' || altAge === '6-12' || altAge === '3-6' || altAge === '0-3';
+    const isAltMonths =
+      altAge.includes('months') ||
+      altAge === '18-24' ||
+      altAge === '12-18' ||
+      altAge === '6-12' ||
+      altAge === '3-6' ||
+      altAge === '0-3';
     const cleanAlt = altAge.replace(/[\s\-_]*(years?|months?)$/i, '').trim();
-    const altMatches = searchInCatalog(cleanAlt, isAltMonths);
+    const altMatches = executeSearch(cleanAlt, isAltMonths);
     if (altMatches.length > 0) {
-      const kucMatch = altMatches.find((m) => m.toUpperCase().startsWith('KUC-'));
+      const preferredMatch = hasYkPattern
+        ? altMatches.find((m) => m.toUpperCase().startsWith('KYK-') || m.toUpperCase().startsWith('DYK-'))
+        : altMatches.find((m) => m.toUpperCase().startsWith('KUC-'));
+
       return {
-        matchedSku: kucMatch || altMatches[0],
+        matchedSku: preferredMatch || altMatches[0],
         candidates: altMatches,
         status: 'matched',
         isNearbyMatch: true,
@@ -439,7 +549,7 @@ app.get('/api/sample-slip', async (_req: Request, res: Response) => {
 
   const enrichedRows = SAMPLE_4_SECTION_DATA.rows.map((r) => {
     const ageUnit = getAgeUnit(r.year);
-    const skuResult = findBestSkuMatches(r.prefix, r.itemCode, r.year, ageUnit, masterSkus);
+    const skuResult = findBestSkuMatches(r.prefix, r.itemCode, r.year, ageUnit, masterSkus, r.rawText);
     return {
       ...r,
       ageType: ageUnit,
@@ -509,10 +619,14 @@ CRITICAL RULES:
    - "TS" or "T-S" or "Tshrt" -> Normalize strictly to "Tshrt" (Whenever you see "TS", output prefix as "Tshrt")
    - "TSUT" (T-Shirt Suit / T-Suit)
    - "PSUT" (Pant Suit)
+   - "NSUT" (Night Suit)
    - "YKTs" or "YKT/s" (stands for "YK Tshrt" / YK T-shirt)
      * NOTE: When you see "YKTs", "YKT/s", "YKT/S", "YKTS", or "YK Tshrt", recognize it as the prefix "YKTs".
      * Do NOT confuse "YKT/s" with a date or fraction; it is the garment prefix for YK Tshrt!
      * Output prefix as "YKTs", and fullCode as "YKTs-<itemCode>" (e.g. YKTs-126).
+   - "YK NSUT" or "YK-NSUT" or "YKNSUT" -> Output prefix as "YK NSUT".
+   - "YK PSUT" or "YK-PSUT" or "YKPSUT" -> Output prefix as "YK PSUT".
+   - "YK TSUT" or "YK-TSUT" or "YKTSUT" -> Output prefix as "YK TSUT".
 
 3. CARRY-FORWARD BLANK RULE (LOCAL TO EACH SECTION):
    - When an item code is omitted/blank at the start of a line (e.g. "- 4 - 5 - 1" or "- 11 - 12 - 2"):
@@ -694,7 +808,8 @@ Extract all rows from all sections systematically. Return strictly JSON matching
           cleanItemCode,
           yearStr,
           ageUnit,
-          masterSkus
+          masterSkus,
+          row.rawText
         );
 
         return {
