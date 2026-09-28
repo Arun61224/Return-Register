@@ -30,6 +30,7 @@ function getAgeUnit(range: string): 'months' | 'years' {
 
 /**
  * Normalizes prefixes including:
+ * - TS / T-S / Tshrt -> Tshrt
  * - TSUT
  * - PSUT
  * - YKTs / YKT/s (meaning YK Tshrt / YK T-shirt)
@@ -37,6 +38,10 @@ function getAgeUnit(range: string): 'months' | 'years' {
 function normalizePrefix(raw: string): string {
   if (!raw) return 'TSUT';
   const clean = raw.trim();
+  // Match TS, T-S, T/S, Tshrt, T-shrt, T-shirt (alone as prefix)
+  if (/^(ts|t[\s\/\-_]s|tshrt|t[\s\-_]?sh[ir]*t)$/i.test(clean)) {
+    return 'Tshrt';
+  }
   // Match YKTs, YKT/s, YKT/S, YKTS, YK Tshrt, YK T-shirt
   if (/^ykt[\s\/\-_]?s?$/i.test(clean) || /yk\s*t[\s\-_]?sh[ir]*t/i.test(clean)) {
     return 'YKTs';
@@ -254,6 +259,7 @@ CRITICAL RULES:
 
 2. CRITICAL PREFIX DETECTION RULES:
    Prefixes written at the top of a column/section or before item numbers indicate garment/part type:
+   - "TS" or "T-S" or "Tshrt" -> Normalize strictly to "Tshrt" (Whenever you see "TS", output prefix as "Tshrt")
    - "TSUT" (T-Shirt Suit / T-Suit)
    - "PSUT" (Pant Suit)
    - "YKTs" or "YKT/s" (stands for "YK Tshrt" / YK T-shirt)
@@ -310,6 +316,10 @@ Extract all rows from all sections systematically. Return strictly JSON matching
             ],
           },
           config: {
+            thinkingConfig: {
+              thinkingBudget: 0,
+            },
+            temperature: 0.1,
             responseMimeType: 'application/json',
             responseSchema: {
               type: Type.OBJECT,
@@ -404,8 +414,8 @@ Extract all rows from all sections systematically. Return strictly JSON matching
         const normalizedPrefix = normalizePrefix(row.prefix || defaultPrefix);
         let cleanItemCode = String(row.itemCode || '').trim();
         
-        // Strip embedded prefix if present in itemCode (e.g. "YKTs-126" or "YKT/s 126")
-        const embeddedMatch = cleanItemCode.match(/^(TSUT|PSUT|YKT[\s\/\-_]?S?|YK\s*T[\s\-_]?SH[IR]*T)[\s\-_:]*(.+)$/i);
+        // Strip embedded prefix if present in itemCode (e.g. "TS-126", "Tshrt 126", "YKTs-126" or "YKT/s 126")
+        const embeddedMatch = cleanItemCode.match(/^(TSUT|PSUT|TSHRT|T[\s\-_]?SH[IR]*T|TS|T\-S|YKT[\s\/\-_]?S?|YK\s*T[\s\-_]?SH[IR]*T)[\s\-_:]*(.+)$/i);
         if (embeddedMatch) {
           cleanItemCode = embeddedMatch[2].trim();
         }

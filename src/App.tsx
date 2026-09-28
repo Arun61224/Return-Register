@@ -158,7 +158,7 @@ export default function App() {
 
   // Process a single slip image
   const extractSingleSlip = async (base64Image: string): Promise<SlipExtractionResult> => {
-    const optimizedBase64 = await compressImageForUpload(base64Image, 1600, 0.88);
+    const optimizedBase64 = await compressImageForUpload(base64Image, 1200, 0.82);
     const response = await fetch('/api/extract-slip', {
       method: 'POST',
       headers: {
@@ -239,7 +239,7 @@ export default function App() {
       setLoadingStep(`Processing Slip ${i + 1} of ${total} (${file.name})...`);
 
       try {
-        const compressedBase64 = await compressImageForUpload(file, 1600, 0.88);
+        const compressedBase64 = await compressImageForUpload(file, 1200, 0.82);
         lastValidImage = compressedBase64;
         const result = await extractSingleSlip(compressedBase64);
 
