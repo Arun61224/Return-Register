@@ -37,10 +37,10 @@ export default function App() {
   const [rows, setRows] = useState<InventoryRow[]>([]);
   const [sections, setSections] = useState<SectionSummary[]>([]);
   const [duplicateWarnings, setDuplicateWarnings] = useState<DuplicateWarning[]>([]);
-  const [detectedPrefix, setDetectedPrefix] = useState<string>('TSUT / PSUT');
-  const [detectedBin, setDetectedBin] = useState<string>('2162 / 2352 / 2342 / 2300');
+  const [detectedPrefix, setDetectedPrefix] = useState<string>('');
+  const [detectedBin, setDetectedBin] = useState<string>('');
   const [currentImage, setCurrentImage] = useState<string | null>(null);
-  const [uploadedImagesCount, setUploadedImagesCount] = useState<number>(1);
+  const [uploadedImagesCount, setUploadedImagesCount] = useState<number>(0);
   const [isAppendMode, setIsAppendMode] = useState<boolean>(true);
 
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -101,10 +101,9 @@ export default function App() {
     }
   };
 
-  // Load sample slip automatically on mount (now preloaded with full 4-section data)
-  useEffect(() => {
-    loadSampleSlip();
-  }, []);
+  // Start with a clean blank sheet by default.
+  // Data will only appear after the user uploads or captures a slip.
+  // (Demo slip can still be loaded on-demand via the "Demo Slip" button).
 
   // Listen for clipboard paste events (e.g. Ctrl+V image)
   useEffect(() => {
