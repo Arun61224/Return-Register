@@ -1,0 +1,467 @@
+import express, { Request, Response } from 'express';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { GoogleGenAI, Type } from '@google/genai';
+
+dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+/**
+ * Determines whether size is 'months' or 'years'
+ * Months: 0-3, 3-6, 6-9, 9-12, 6-12, 12-18, 18-24
+ * Years: 1-2, 2-3, 3-4, 4-5, 5-6, 6-7, 7-8, 8-9, 9-10, 11-12, 13-14, 15-16
+ */
+function getAgeUnit(range: string): 'months' | 'years' {
+  if (!range) return 'years';
+  const clean = range.trim().toLowerCase().replace(/\s+/g, '');
+  const months = new Set(['0-3', '3-6', '6-9', '9-12', '6-12', '12-18', '18-24']);
+  if (months.has(clean)) return 'months';
+  return 'years';
+}
+
+/**
+ * Normalizes prefixes including:
+ * - TSUT
+ * - PSUT
+ * - YKTs / YKT/s (meaning YK Tshrt / YK T-shirt)
+ */
+function normalizePrefix(raw: string): string {
+  if (!raw) return 'TSUT';
+  const clean = raw.trim();
+  // Match YKTs, YKT/s, YKT/S, YKTS, YK Tshrt, YK T-shirt
+  if (/^ykt[\s\/\-_]?s?$/i.test(clean) || /yk\s*t[\s\-_]?sh[ir]*t/i.test(clean)) {
+    return 'YKTs';
+  }
+  if (/^tsut$/i.test(clean)) return 'TSUT';
+  if (/^psut$/i.test(clean)) return 'PSUT';
+  return clean;
+}
+
+// Full 4-section dataset corresponding to handwritten.jpeg (58 rows across 4 sections)
+const SAMPLE_4_SECTION_DATA = {
+  detectedPrefix: 'TSUT / PSUT',
+  detectedBinNumber: '2162 / 2352 / 2342 / 2300',
+  sections: [
+    {
+      sectionIndex: 1,
+      title: 'Section 1 (Top-Left)',
+      prefix: 'TSUT',
+      binNumber: '2162',
+      rowCount: 15,
+      totalQty: 16,
+    },
+    {
+      sectionIndex: 2,
+      title: 'Section 2 (Top-Right)',
+      prefix: 'PSUT',
+      binNumber: '2352',
+      rowCount: 15,
+      totalQty: 15,
+    },
+    {
+      sectionIndex: 3,
+      title: 'Section 3 (Bottom-Left)',
+      prefix: 'PSUT',
+      binNumber: '2342',
+      rowCount: 14,
+      totalQty: 14,
+    },
+    {
+      sectionIndex: 4,
+      title: 'Section 4 (Bottom-Right)',
+      prefix: 'PSUT',
+      binNumber: '2300',
+      rowCount: 14,
+      totalQty: 14,
+    },
+  ],
+  rows: [
+    // --- SECTION 1: TOP-LEFT (TSUT [2162]) ---
+    { id: 'sec1-1', rowNumber: 1, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: 'TSUT- 126 - 11 - 12 - 1', prefix: 'TSUT', itemCode: '126', fullCode: 'TSUT-126', year: '11-12', quantity: 1, binNumber: '2162', isCarryForward: false },
+    { id: 'sec1-2', rowNumber: 2, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '- 4 - 5 - 1', prefix: 'TSUT', itemCode: '126', fullCode: 'TSUT-126', year: '4-5', quantity: 1, binNumber: '2162', isCarryForward: true, carryForwardFrom: '126' },
+    { id: 'sec1-3', rowNumber: 3, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '117 - 4 - 5 - 1', prefix: 'TSUT', itemCode: '117', fullCode: 'TSUT-117', year: '4-5', quantity: 1, binNumber: '2162', isCarryForward: false },
+    { id: 'sec1-4', rowNumber: 4, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '120 - 3 - 4 - 1', prefix: 'TSUT', itemCode: '120', fullCode: 'TSUT-120', year: '3-4', quantity: 1, binNumber: '2162', isCarryForward: false },
+    { id: 'sec1-5', rowNumber: 5, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '127 - 7 - 8 - 1', prefix: 'TSUT', itemCode: '127', fullCode: 'TSUT-127', year: '7-8', quantity: 1, binNumber: '2162', isCarryForward: false },
+    { id: 'sec1-6', rowNumber: 6, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '- 11 - 12 - 2', prefix: 'TSUT', itemCode: '127', fullCode: 'TSUT-127', year: '11-12', quantity: 2, binNumber: '2162', isCarryForward: true, carryForwardFrom: '127' },
+    { id: 'sec1-7', rowNumber: 7, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '125 - 2 - 3 - 1', prefix: 'TSUT', itemCode: '125', fullCode: 'TSUT-125', year: '2-3', quantity: 1, binNumber: '2162', isCarryForward: false },
+    { id: 'sec1-8', rowNumber: 8, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '121 - 13 - 14 - 1', prefix: 'TSUT', itemCode: '121', fullCode: 'TSUT-121', year: '13-14', quantity: 1, binNumber: '2162', isCarryForward: false },
+    { id: 'sec1-9', rowNumber: 9, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '129 - 4 - 5 - 1', prefix: 'TSUT', itemCode: '129', fullCode: 'TSUT-129', year: '4-5', quantity: 1, binNumber: '2162', isCarryForward: false },
+    { id: 'sec1-10', rowNumber: 10, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '103 - 3 - 4 - 1', prefix: 'TSUT', itemCode: '103', fullCode: 'TSUT-103', year: '3-4', quantity: 1, binNumber: '2162', isCarryForward: false },
+    { id: 'sec1-11', rowNumber: 11, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '129 - 3 - 4 - 1', prefix: 'TSUT', itemCode: '129', fullCode: 'TSUT-129', year: '3-4', quantity: 1, binNumber: '2162', isCarryForward: false },
+    { id: 'sec1-12', rowNumber: 12, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '108 - 4 - 5 - 1', prefix: 'TSUT', itemCode: '108', fullCode: 'TSUT-108', year: '4-5', quantity: 1, binNumber: '2162', isCarryForward: false },
+    { id: 'sec1-13', rowNumber: 13, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '115 - 9 - 10 - 1', prefix: 'TSUT', itemCode: '115', fullCode: 'TSUT-115', year: '9-10', quantity: 1, binNumber: '2162', isCarryForward: false },
+    { id: 'sec1-14', rowNumber: 14, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '108 - 1 - 2 - 1', prefix: 'TSUT', itemCode: '108', fullCode: 'TSUT-108', year: '1-2', quantity: 1, binNumber: '2162', isCarryForward: false },
+    { id: 'sec1-15', rowNumber: 15, sectionIndex: 1, sectionName: 'Sec 1 (Top-Left)', rawText: '- 4 - 5 - 1', prefix: 'TSUT', itemCode: '108', fullCode: 'TSUT-108', year: '4-5', quantity: 1, binNumber: '2162', isCarryForward: true, carryForwardFrom: '108' },
+
+    // --- SECTION 2: TOP-RIGHT (PSUT [2352]) ---
+    { id: 'sec2-16', rowNumber: 16, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: 'PSUT- 223 - 6 - 7 - 1', prefix: 'PSUT', itemCode: '223', fullCode: 'PSUT-223', year: '6-7', quantity: 1, binNumber: '2352', isCarryForward: false },
+    { id: 'sec2-17', rowNumber: 17, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '195 - 2 - 3 - 1', prefix: 'PSUT', itemCode: '195', fullCode: 'PSUT-195', year: '2-3', quantity: 1, binNumber: '2352', isCarryForward: false },
+    { id: 'sec2-18', rowNumber: 18, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '166 - 6 - 12 - 1', prefix: 'PSUT', itemCode: '166', fullCode: 'PSUT-166', year: '6-12', quantity: 1, binNumber: '2352', isCarryForward: false },
+    { id: 'sec2-19', rowNumber: 19, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '170 - 2 - 3 - 1', prefix: 'PSUT', itemCode: '170', fullCode: 'PSUT-170', year: '2-3', quantity: 1, binNumber: '2352', isCarryForward: false },
+    { id: 'sec2-20', rowNumber: 20, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '102 - 4 - 5 - 1', prefix: 'PSUT', itemCode: '102', fullCode: 'PSUT-102', year: '4-5', quantity: 1, binNumber: '2352', isCarryForward: false },
+    { id: 'sec2-21', rowNumber: 21, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '169 - 6 - 12 - 1', prefix: 'PSUT', itemCode: '169', fullCode: 'PSUT-169', year: '6-12', quantity: 1, binNumber: '2352', isCarryForward: false },
+    { id: 'sec2-22', rowNumber: 22, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '103 - 18 - 24 - 1', prefix: 'PSUT', itemCode: '103', fullCode: 'PSUT-103', year: '18-24', quantity: 1, binNumber: '2352', isCarryForward: false },
+    { id: 'sec2-23', rowNumber: 23, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '206 - 6 - 7 - 1', prefix: 'PSUT', itemCode: '206', fullCode: 'PSUT-206', year: '6-7', quantity: 1, binNumber: '2352', isCarryForward: false },
+    { id: 'sec2-24', rowNumber: 24, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '139 - 6 - 12 - 1', prefix: 'PSUT', itemCode: '139', fullCode: 'PSUT-139', year: '6-12', quantity: 1, binNumber: '2352', isCarryForward: false },
+    { id: 'sec2-25', rowNumber: 25, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '235 - 6 - 12 - 1', prefix: 'PSUT', itemCode: '235', fullCode: 'PSUT-235', year: '6-12', quantity: 1, binNumber: '2352', isCarryForward: false },
+    { id: 'sec2-26', rowNumber: 26, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '170 - 3 - 4 - 1', prefix: 'PSUT', itemCode: '170', fullCode: 'PSUT-170', year: '3-4', quantity: 1, binNumber: '2352', isCarryForward: false },
+    { id: 'sec2-27', rowNumber: 27, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '- 6 - 7 - 1', prefix: 'PSUT', itemCode: '170', fullCode: 'PSUT-170', year: '6-7', quantity: 1, binNumber: '2352', isCarryForward: true, carryForwardFrom: '170' },
+    { id: 'sec2-28', rowNumber: 28, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '163 - 12 - 18 - 1', prefix: 'PSUT', itemCode: '163', fullCode: 'PSUT-163', year: '12-18', quantity: 1, binNumber: '2352', isCarryForward: false },
+    { id: 'sec2-29', rowNumber: 29, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '223 - 4 - 5 - 1', prefix: 'PSUT', itemCode: '223', fullCode: 'PSUT-223', year: '4-5', quantity: 1, binNumber: '2352', isCarryForward: false },
+    { id: 'sec2-30', rowNumber: 30, sectionIndex: 2, sectionName: 'Sec 2 (Top-Right)', rawText: '141 - 9 - 10 - 1', prefix: 'PSUT', itemCode: '141', fullCode: 'PSUT-141', year: '9-10', quantity: 1, binNumber: '2352', isCarryForward: false },
+
+    // --- SECTION 3: BOTTOM-LEFT (PSUT [2342]) ---
+    { id: 'sec3-31', rowNumber: 31, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: 'PSUT- 170 - 3 - 4 - 1', prefix: 'PSUT', itemCode: '170', fullCode: 'PSUT-170', year: '3-4', quantity: 1, binNumber: '2342', isCarryForward: false },
+    { id: 'sec3-32', rowNumber: 32, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: '151 - 2 - 3 - 1', prefix: 'PSUT', itemCode: '151', fullCode: 'PSUT-151', year: '2-3', quantity: 1, binNumber: '2342', isCarryForward: false },
+    { id: 'sec3-33', rowNumber: 33, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: '113 - 6 - 12 - 1', prefix: 'PSUT', itemCode: '113', fullCode: 'PSUT-113', year: '6-12', quantity: 1, binNumber: '2342', isCarryForward: false },
+    { id: 'sec3-34', rowNumber: 34, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: '239 - 6 - 7 - 1', prefix: 'PSUT', itemCode: '239', fullCode: 'PSUT-239', year: '6-7', quantity: 1, binNumber: '2342', isCarryForward: false },
+    { id: 'sec3-35', rowNumber: 35, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: '171 - 6 - 7 - 1', prefix: 'PSUT', itemCode: '171', fullCode: 'PSUT-171', year: '6-7', quantity: 1, binNumber: '2342', isCarryForward: false },
+    { id: 'sec3-36', rowNumber: 36, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: '104 - 2 - 3 - 1', prefix: 'PSUT', itemCode: '104', fullCode: 'PSUT-104', year: '2-3', quantity: 1, binNumber: '2342', isCarryForward: false },
+    { id: 'sec3-37', rowNumber: 37, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: '147 - 12 - 18 - 1', prefix: 'PSUT', itemCode: '147', fullCode: 'PSUT-147', year: '12-18', quantity: 1, binNumber: '2342', isCarryForward: false },
+    { id: 'sec3-38', rowNumber: 38, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: '133 - 6 - 7 - 1', prefix: 'PSUT', itemCode: '133', fullCode: 'PSUT-133', year: '6-7', quantity: 1, binNumber: '2342', isCarryForward: false },
+    { id: 'sec3-39', rowNumber: 39, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: '169 - 3 - 4 - 1', prefix: 'PSUT', itemCode: '169', fullCode: 'PSUT-169', year: '3-4', quantity: 1, binNumber: '2342', isCarryForward: false },
+    { id: 'sec3-40', rowNumber: 40, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: '222 - 6 - 12 - 1', prefix: 'PSUT', itemCode: '222', fullCode: 'PSUT-222', year: '6-12', quantity: 1, binNumber: '2342', isCarryForward: false },
+    { id: 'sec3-41', rowNumber: 41, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: '232 - 12 - 18 - 1', prefix: 'PSUT', itemCode: '232', fullCode: 'PSUT-232', year: '12-18', quantity: 1, binNumber: '2342', isCarryForward: false },
+    { id: 'sec3-42', rowNumber: 42, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: '235 - 4 - 5 - 1', prefix: 'PSUT', itemCode: '235', fullCode: 'PSUT-235', year: '4-5', quantity: 1, binNumber: '2342', isCarryForward: false },
+    { id: 'sec3-43', rowNumber: 43, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: '223 - 5 - 6 - 1', prefix: 'PSUT', itemCode: '223', fullCode: 'PSUT-223', year: '5-6', quantity: 1, binNumber: '2342', isCarryForward: false },
+    { id: 'sec3-44', rowNumber: 44, sectionIndex: 3, sectionName: 'Sec 3 (Bottom-Left)', rawText: '105 - 12 - 18 - 1', prefix: 'PSUT', itemCode: '105', fullCode: 'PSUT-105', year: '12-18', quantity: 1, binNumber: '2342', isCarryForward: false },
+
+    // --- SECTION 4: BOTTOM-RIGHT (PSUT [2300]) ---
+    { id: 'sec4-45', rowNumber: 45, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: 'PSUT- 169 - 6 - 7 - 1', prefix: 'PSUT', itemCode: '169', fullCode: 'PSUT-169', year: '6-7', quantity: 1, binNumber: '2300', isCarryForward: false },
+    { id: 'sec4-46', rowNumber: 46, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: '- 5 - 6 - 1', prefix: 'PSUT', itemCode: '169', fullCode: 'PSUT-169', year: '5-6', quantity: 1, binNumber: '2300', isCarryForward: true, carryForwardFrom: '169' },
+    { id: 'sec4-47', rowNumber: 47, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: '- 2 - 3 - 1', prefix: 'PSUT', itemCode: '169', fullCode: 'PSUT-169', year: '2-3', quantity: 1, binNumber: '2300', isCarryForward: true, carryForwardFrom: '169' },
+    { id: 'sec4-48', rowNumber: 48, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: '188 - 5 - 6 - 1', prefix: 'PSUT', itemCode: '188', fullCode: 'PSUT-188', year: '5-6', quantity: 1, binNumber: '2300', isCarryForward: false },
+    { id: 'sec4-49', rowNumber: 49, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: '- 4 - 5 - 1', prefix: 'PSUT', itemCode: '188', fullCode: 'PSUT-188', year: '4-5', quantity: 1, binNumber: '2300', isCarryForward: true, carryForwardFrom: '188' },
+    { id: 'sec4-50', rowNumber: 50, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: '216 - 12 - 18 - 1', prefix: 'PSUT', itemCode: '216', fullCode: 'PSUT-216', year: '12-18', quantity: 1, binNumber: '2300', isCarryForward: false },
+    { id: 'sec4-51', rowNumber: 51, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: '170 - 18 - 24 - 1', prefix: 'PSUT', itemCode: '170', fullCode: 'PSUT-170', year: '18-24', quantity: 1, binNumber: '2300', isCarryForward: false },
+    { id: 'sec4-52', rowNumber: 52, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: '169 - 3 - 4 - 1', prefix: 'PSUT', itemCode: '169', fullCode: 'PSUT-169', year: '3-4', quantity: 1, binNumber: '2300', isCarryForward: false },
+    { id: 'sec4-53', rowNumber: 53, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: '196 - 5 - 6 - 1', prefix: 'PSUT', itemCode: '196', fullCode: 'PSUT-196', year: '5-6', quantity: 1, binNumber: '2300', isCarryForward: false },
+    { id: 'sec4-54', rowNumber: 54, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: '227 - 5 - 6 - 1', prefix: 'PSUT', itemCode: '227', fullCode: 'PSUT-227', year: '5-6', quantity: 1, binNumber: '2300', isCarryForward: false },
+    { id: 'sec4-55', rowNumber: 55, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: '171 - 4 - 5 - 1', prefix: 'PSUT', itemCode: '171', fullCode: 'PSUT-171', year: '4-5', quantity: 1, binNumber: '2300', isCarryForward: false },
+    { id: 'sec4-56', rowNumber: 56, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: '- 2 - 3 - 1', prefix: 'PSUT', itemCode: '171', fullCode: 'PSUT-171', year: '2-3', quantity: 1, binNumber: '2300', isCarryForward: true, carryForwardFrom: '171' },
+    { id: 'sec4-57', rowNumber: 57, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: '274 - 6 - 7 - 1', prefix: 'PSUT', itemCode: '274', fullCode: 'PSUT-274', year: '6-7', quantity: 1, binNumber: '2300', isCarryForward: false },
+    { id: 'sec4-58', rowNumber: 58, sectionIndex: 4, sectionName: 'Sec 4 (Bottom-Right)', rawText: '162 - 4 - 5 - 1', prefix: 'PSUT', itemCode: '162', fullCode: 'PSUT-162', year: '4-5', quantity: 1, binNumber: '2300', isCarryForward: false },
+  ],
+  duplicateWarnings: [
+    {
+      id: 'dup-TSUT-108__4-5',
+      itemCode: '108',
+      fullCode: 'TSUT-108',
+      year: '4-5',
+      rowIndices: [12, 15],
+      message: 'TSUT-108 (Year 4-5) appears in rows [12, 15]',
+      resolved: false,
+    },
+    {
+      id: 'dup-PSUT-170__3-4',
+      itemCode: '170',
+      fullCode: 'PSUT-170',
+      year: '3-4',
+      rowIndices: [26, 31],
+      message: 'PSUT-170 (Year 3-4) appears in rows [26, 31]',
+      resolved: false,
+    },
+    {
+      id: 'dup-PSUT-169__3-4',
+      itemCode: '169',
+      fullCode: 'PSUT-169',
+      year: '3-4',
+      rowIndices: [39, 52],
+      message: 'PSUT-169 (Year 3-4) appears in rows [39, 52]',
+      resolved: false,
+    },
+    {
+      id: 'dup-PSUT-171__2-3',
+      itemCode: '171',
+      fullCode: 'PSUT-171',
+      year: '2-3',
+      rowIndices: [36, 56],
+      message: 'PSUT-171 / PSUT-104 (Year 2-3) repeats',
+      resolved: false,
+    },
+  ],
+};
+
+app.get('/api/sample-slip', (_req: Request, res: Response) => {
+  const enrichedRows = SAMPLE_4_SECTION_DATA.rows.map((r) => ({
+    ...r,
+    ageType: getAgeUnit(r.year),
+  }));
+
+  res.json({
+    success: true,
+    data: {
+      ...SAMPLE_4_SECTION_DATA,
+      rows: enrichedRows,
+    },
+  });
+});
+
+app.post('/api/extract-slip', async (req: Request, res: Response) => {
+  try {
+    const { imageBase64, mimeType = 'image/jpeg', defaultPrefix = 'TSUT' } = req.body;
+
+    if (!imageBase64) {
+      res.status(400).json({ error: 'Image data is required (imageBase64)' });
+      return;
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      res.status(500).json({
+        error: 'GEMINI_API_KEY is not configured on the server.',
+      });
+      return;
+    }
+
+    const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const promptText = `
+You are an expert OCR & inventory data extraction engine specializing in handwritten inventory, warehouse stock, and bin slips.
+
+IMPORTANT MULTI-SECTION SHEET LAYOUT:
+A notebook page often has 4 SEPARATE QUADRANTS / SECTIONS:
+- Section 1: Top-Left (e.g. starts with TSUT-126..., has its own bottom bin number like [2162])
+- Section 2: Top-Right (e.g. starts with PSUT-223..., has its own bottom bin number like [2352])
+- Section 3: Bottom-Left (e.g. starts with PSUT-170..., has its own bottom bin number like [2342])
+- Section 4: Bottom-Right (e.g. starts with PSUT-169..., has its own bottom bin number like [2300])
+
+CRITICAL RULES:
+1. DETECT ALL SECTIONS ON THE PAGE:
+   - Identify each section (typically 1 to 4 sections).
+   - For each section, find:
+     a) Its section prefix (written at the top of that section, e.g. TSUT, PSUT, or YKTs / YKT/s).
+     b) Its rows, read line-by-line from top to bottom within that column.
+     c) Its bin number enclosed in a bracket/box at the bottom of THAT SPECIFIC column (e.g. [2162], [2352], [2342], [2300]).
+
+2. CRITICAL PREFIX DETECTION RULES:
+   Prefixes written at the top of a column/section or before item numbers indicate garment/part type:
+   - "TSUT" (T-Shirt Suit / T-Suit)
+   - "PSUT" (Pant Suit)
+   - "YKTs" or "YKT/s" (stands for "YK Tshrt" / YK T-shirt)
+     * NOTE: When you see "YKTs", "YKT/s", "YKT/S", "YKTS", or "YK Tshrt", recognize it as the prefix "YKTs".
+     * Do NOT confuse "YKT/s" with a date or fraction; it is the garment prefix for YK Tshrt!
+     * Output prefix as "YKTs", and fullCode as "YKTs-<itemCode>" (e.g. YKTs-126).
+
+3. CARRY-FORWARD BLANK RULE (LOCAL TO EACH SECTION):
+   - When an item code is omitted/blank at the start of a line (e.g. "- 4 - 5 - 1" or "- 11 - 12 - 2"):
+   - INHERIT the item code from the line immediately above it within the SAME section!
+   - Mark isCarryForward = true, and carryForwardFrom = the inherited code.
+
+4. ROW FIELDS:
+   - Prefix: Section prefix (e.g. TSUT, PSUT, or YKTs)
+   - Item Code: e.g. 126, 223, 170, 169
+   - Full Code: PREFIX-ITEMCODE (e.g. TSUT-126, PSUT-223, YKTs-126)
+   - Year: The dash-separated year range e.g. "11-12", "6-7", "6-12", "18-24", "4-5"
+   - Quantity: The last number in the line (e.g. 1, 2)
+   - Bin Number: The bin number for THIS section (e.g. 2162 for Section 1, 2352 for Section 2, etc.)
+   - Section Index: 1, 2, 3, or 4
+
+5. DO NOT MERGE DUPLICATES:
+   - Every single line written on paper must be an individual row in the output array. Keep all duplicate lines as separate rows!
+
+Extract all rows from all sections systematically. Return strictly JSON matching the response schema.
+`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: {
+        parts: [
+          {
+            inlineData: {
+              data: cleanBase64,
+              mimeType,
+            },
+          },
+          {
+            text: promptText,
+          },
+        ],
+      },
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            detectedPrefix: {
+              type: Type.STRING,
+              description: 'Primary or combined prefixes detected (e.g. TSUT / PSUT)',
+            },
+            detectedBinNumber: {
+              type: Type.STRING,
+              description: 'List of bin numbers detected (e.g. 2162 / 2352 / 2342 / 2300)',
+            },
+            sections: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  sectionIndex: { type: Type.INTEGER },
+                  title: { type: Type.STRING },
+                  prefix: { type: Type.STRING },
+                  binNumber: { type: Type.STRING },
+                  rowCount: { type: Type.INTEGER },
+                  totalQty: { type: Type.INTEGER },
+                },
+                required: ['sectionIndex', 'prefix', 'binNumber'],
+              },
+            },
+            rows: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  rowNumber: { type: Type.INTEGER },
+                  sectionIndex: { type: Type.INTEGER },
+                  sectionName: { type: Type.STRING },
+                  rawText: { type: Type.STRING },
+                  prefix: { type: Type.STRING },
+                  itemCode: { type: Type.STRING },
+                  fullCode: { type: Type.STRING },
+                  year: { type: Type.STRING },
+                  quantity: { type: Type.NUMBER },
+                  binNumber: { type: Type.STRING },
+                  isCarryForward: { type: Type.BOOLEAN },
+                  carryForwardFrom: { type: Type.STRING },
+                },
+                required: ['itemCode', 'year', 'quantity', 'isCarryForward', 'binNumber'],
+              },
+            },
+            duplicateWarnings: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  itemCode: { type: Type.STRING },
+                  fullCode: { type: Type.STRING },
+                  year: { type: Type.STRING },
+                  rowIndices: {
+                    type: Type.ARRAY,
+                    items: { type: Type.INTEGER },
+                  },
+                  message: { type: Type.STRING },
+                },
+                required: ['itemCode', 'year', 'rowIndices', 'message'],
+              },
+            },
+          },
+          required: ['rows'],
+        },
+      },
+    });
+
+    const parsedJsonText = response.text?.trim() || '{}';
+    const result = JSON.parse(parsedJsonText);
+
+    // Number rows sequentially, normalize prefixes and assign IDs
+    if (result.rows && Array.isArray(result.rows)) {
+      result.rows = result.rows.map((row: any, idx: number) => {
+        const normalizedPrefix = normalizePrefix(row.prefix || defaultPrefix);
+        let cleanItemCode = String(row.itemCode || '').trim();
+        
+        // Strip embedded prefix if present in itemCode (e.g. "YKTs-126" or "YKT/s 126")
+        const embeddedMatch = cleanItemCode.match(/^(TSUT|PSUT|YKT[\s\/\-_]?S?|YK\s*T[\s\-_]?SH[IR]*T)[\s\-_:]*(.+)$/i);
+        if (embeddedMatch) {
+          cleanItemCode = embeddedMatch[2].trim();
+        }
+
+        const fullCode = `${normalizedPrefix}-${cleanItemCode}`;
+
+        return {
+          id: `row-${Date.now()}-${idx + 1}`,
+          rowNumber: idx + 1,
+          sectionIndex: row.sectionIndex || 1,
+          sectionName: row.sectionName || `Section ${row.sectionIndex || 1}`,
+          rawText: row.rawText || '',
+          prefix: normalizedPrefix,
+          itemCode: cleanItemCode,
+          fullCode,
+          year: String(row.year || ''),
+          ageType: getAgeUnit(String(row.year || '')),
+          quantity: typeof row.quantity === 'number' ? row.quantity : parseInt(row.quantity, 10) || 1,
+          binNumber: String(row.binNumber || ''),
+          isCarryForward: Boolean(row.isCarryForward),
+          carryForwardFrom: row.carryForwardFrom || '',
+        };
+      });
+    }
+
+    // Calculate duplicate entries across all rows
+    const duplicateMap = new Map<string, number[]>();
+    (result.rows || []).forEach((row: any) => {
+      const key = `${row.fullCode || row.itemCode}__${row.year}`;
+      if (!duplicateMap.has(key)) {
+        duplicateMap.set(key, []);
+      }
+      duplicateMap.get(key)!.push(row.rowNumber);
+    });
+
+    const detectedDuplicates: any[] = [];
+    duplicateMap.forEach((rowNumbers, key) => {
+      if (rowNumbers.length > 1) {
+        const [fullCode, year] = key.split('__');
+        detectedDuplicates.push({
+          id: `dup-${key}`,
+          fullCode,
+          itemCode: fullCode.replace(/^[^-]+-/, ''),
+          year,
+          rowIndices: rowNumbers,
+          message: `${fullCode} (Year ${year}) appears ${rowNumbers.length} times in rows [${rowNumbers.join(', ')}]`,
+          resolved: false,
+        });
+      }
+    });
+
+    result.duplicateWarnings = detectedDuplicates;
+
+    res.json({
+      success: true,
+      data: result,
+    });
+  } catch (error: any) {
+    console.error('Error processing multi-section slip image with Gemini:', error);
+    res.status(500).json({
+      error: error?.message || 'Failed to extract data from multi-section slip image.',
+    });
+  }
+});
+
+async function startServer() {
+  if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    app.use(express.static(path.join(__dirname, 'dist')));
+    app.get('*', (_req, res) => {
+      res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+    });
+  }
+
+  app.listen(port, () => {
+    console.log(`Slip2Excel server listening on port ${port}`);
+  });
+}
+
+startServer();
