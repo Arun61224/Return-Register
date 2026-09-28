@@ -271,8 +271,9 @@ fetchMasterSkusFromSheet(false).catch((e) => console.warn('Prefetch error:', e))
  * STRICT LIMIT: Only for baby/toddler sizes up to 1-2 years (0-24 months).
  * 2-3 years and above will NOT be auto-shifted; they must match exactly.
  *
- * Rule for 0-24 months / 1-2 years:
- * Pehle chhota size lio (18-24m -> 12-18m -> 9-12m), agar na mile tab ek size bada lio (2-3years).
+ * Priority Rule for 0-24 months / 1-2 years:
+ * Check smaller adjacent size first (18-24m -> 12-18m -> 9-12m).
+ * If smaller is not found in master sheet, check next larger size (2-3years).
  */
 const AGE_NEAR_FALLBACKS: Record<string, string[]> = {
   // Baby & Toddler (0 to 24 months / 1-2 years only)

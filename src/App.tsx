@@ -247,7 +247,7 @@ export default function App() {
       console.error('OCR Error:', err);
       let displayError = err?.message || 'Error scanning image. Please make sure the photo is clear.';
       if (displayError.includes('high demand') || displayError.includes('503') || displayError.includes('UNAVAILABLE')) {
-        displayError = 'Google AI server par temporary high demand hai. Kripya 5-10 second baad dobara koshish karein.';
+        displayError = 'Google AI service is experiencing high demand. Please try again in 5-10 seconds.';
       }
       setErrorMessage(displayError);
     } finally {
@@ -1115,10 +1115,10 @@ export default function App() {
                             <FileSpreadsheet className="w-7 h-7" />
                           </div>
                           <h3 className={`text-base font-bold mb-1 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
-                            Spreadsheet is Blank (Khali Sheet)
+                            Spreadsheet is Empty
                           </h3>
                           <p className={`text-xs mb-5 max-w-sm font-sans ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                            Aap nayi notebook slip photo click kar sakte hain, image upload kar sakte hain, ya manually entry add kar sakte hain.
+                            Capture a photo of a notebook slip, upload an image file, or add entries manually.
                           </p>
                           <div className="flex flex-wrap items-center justify-center gap-2.5">
                             <button
@@ -1410,7 +1410,7 @@ export default function App() {
                                 }`}
                                 title={
                                   row.isNearbyMatch
-                                    ? `Exact size nahi mila, isliye close size master SKU liya gaya: ${row.matchedSku}`
+                                    ? `Exact size not found in sheet; closest matching Master SKU selected: ${row.matchedSku}`
                                     : 'Exact Master SKU matched with Google Sheet'
                                 }
                               >
