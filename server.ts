@@ -268,33 +268,23 @@ fetchMasterSkusFromSheet(false).catch((e) => console.warn('Prefetch error:', e))
 
 /**
  * List of ordered fallback age alternatives when a specific age is missing in the master catalog.
- * E.g. For "1-2years" (12-24 months):
- * Priority: 18-24months -> 12-18months -> 2-3years -> 9-12months
+ * STRICT LIMIT: Only for baby/toddler sizes up to 1-2 years (0-24 months).
+ * 2-3 years and above will NOT be auto-shifted; they must match exactly.
+ *
+ * Rule for 0-24 months / 1-2 years:
+ * Pehle chhota size lio (18-24m -> 12-18m -> 9-12m), agar na mile tab ek size bada lio (2-3years).
  */
 const AGE_NEAR_FALLBACKS: Record<string, string[]> = {
-  // 1-2 years
-  '1-2': ['18-24', '12-18', '2-3', '9-12'],
-  '1-2years': ['18-24months', '12-18months', '2-3years', '9-12months'],
-  // 12-18 months
-  '12-18': ['18-24', '1-2', '9-12', '2-3'],
-  // 18-24 months
-  '18-24': ['1-2', '12-18', '2-3'],
-  // 2-3 years
-  '2-3': ['1-2', '18-24', '3-4'],
-  // 3-4 years
-  '3-4': ['2-3', '4-5'],
-  // 4-5 years
-  '4-5': ['3-4', '5-6'],
-  // 5-6 years
-  '5-6': ['4-5', '6-7'],
-  // 6-7 years
-  '6-7': ['5-6', '7-8'],
-  // 6-12 months
-  '6-12': ['3-6', '9-12', '12-18'],
-  // 0-3 months
-  '0-3': ['3-6', '0-6'],
-  // 3-6 months
-  '3-6': ['0-3', '6-12', '6-9'],
+  // Baby & Toddler (0 to 24 months / 1-2 years only)
+  '0-3': ['3-6', '6-12'],
+  '3-6': ['0-3', '6-12', '6-9', '9-12'],
+  '6-9': ['3-6', '0-3', '6-12', '9-12'],
+  '6-12': ['3-6', '0-3', '9-12', '12-18'],
+  '9-12': ['6-12', '3-6', '12-18', '18-24', '1-2'],
+  '12-18': ['9-12', '6-12', '18-24', '1-2', '2-3'],
+  '18-24': ['12-18', '1-2', '9-12', '6-12', '2-3'],
+  '1-2': ['18-24', '12-18', '9-12', '6-12', '2-3'],
+  '1-2years': ['18-24months', '12-18months', '9-12months', '6-12months', '2-3years'],
 };
 
 /**
