@@ -15,6 +15,8 @@ import {
   Moon,
   Search,
   Crop,
+  FileX,
+  Plus,
 } from 'lucide-react';
 
 import { InventoryRow, DuplicateWarning, SlipExtractionResult, SectionSummary } from './types/inventory';
@@ -318,6 +320,15 @@ export default function App() {
     });
   };
 
+  const handleClearSheet = () => {
+    setRows([]);
+    setSections([]);
+    setDuplicateWarnings([]);
+    setCurrentImage(null);
+    setSearchQuery('');
+    setErrorMessage(null);
+  };
+
   const handleAddNewRow = () => {
     const lastRow = rows[rows.length - 1];
     const newRowNumber = rows.length + 1;
@@ -550,18 +561,34 @@ export default function App() {
               </button>
             )}
 
+            {/* Blank Sheet (Clear Table) */}
+            <button
+              type="button"
+              onClick={handleClearSheet}
+              title="Clear all rows and make spreadsheet blank (Khali sheet)"
+              className={`px-2.5 py-2 text-xs rounded-lg border transition cursor-pointer flex items-center gap-1.5 shadow-xs ${
+                isDarkMode
+                  ? 'bg-rose-950/40 text-rose-300 border-rose-800/60 hover:bg-rose-900/50'
+                  : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
+              }`}
+            >
+              <FileX className="w-3.5 h-3.5 text-rose-500" />
+              <span>Blank Sheet</span>
+            </button>
+
             {/* Reload Sample Slip */}
             <button
               type="button"
               onClick={loadSampleSlip}
-              title="Reload 4-section sample slip (58 rows)"
-              className={`p-2 text-xs rounded-lg border transition cursor-pointer ${
+              title="Reload sample slip with demo rows (58 rows)"
+              className={`px-2.5 py-2 text-xs rounded-lg border transition cursor-pointer flex items-center gap-1.5 shadow-xs ${
                 isDarkMode
                   ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
-                  : 'bg-white hover:bg-slate-50 text-slate-600 border-slate-300 shadow-xs'
+                  : 'bg-white hover:bg-slate-50 text-slate-600 border-slate-300'
               }`}
             >
-              <RefreshCw className="w-4 h-4 text-emerald-600" />
+              <RefreshCw className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="hidden sm:inline">Demo Slip</span>
             </button>
 
             {/* Theme Toggle (Dark / Light) */}
@@ -661,12 +688,26 @@ export default function App() {
               </div>
             </div>
 
-            {/* Export & Copy action buttons */}
+            {/* Export, Add Row & Clear action buttons */}
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
+                onClick={handleAddNewRow}
+                title="Add a new blank row manually"
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg border flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs ${
+                  isDarkMode
+                    ? 'bg-slate-800 hover:bg-slate-700 text-emerald-400 border-slate-700'
+                    : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
+                }`}
+              >
+                <Plus className="w-3.5 h-3.5 text-emerald-600" />
+                <span>+ Add Row</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={handleCopyClipboard}
-                className={`px-3.5 py-1.5 text-xs font-medium rounded-lg border flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs ${
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg border flex items-center gap-1.5 transition active:scale-95 cursor-pointer shadow-xs ${
                   isDarkMode
                     ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
                     : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
@@ -681,7 +722,7 @@ export default function App() {
                 ) : (
                   <>
                     <Copy className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Copy for Excel</span>
+                    <span>Copy</span>
                   </>
                 )}
               </button>
@@ -689,7 +730,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleDownloadCSV}
-                className={`px-3.5 py-1.5 text-xs font-medium rounded-lg border flex items-center gap-1.5 transition cursor-pointer shadow-xs ${
+                className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border flex items-center gap-1.5 transition cursor-pointer shadow-xs ${
                   isDarkMode
                     ? 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
                     : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200 hover:border-slate-300'
@@ -702,12 +743,28 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleExportExcel}
-                className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-sm hover:shadow transition active:scale-95 cursor-pointer"
+                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-sm hover:shadow transition active:scale-95 cursor-pointer"
                 title="Downloads clean Excel workbook (.xlsx)"
               >
-                <FileSpreadsheet className="w-4 h-4" />
-                <span>Download Excel (.xlsx)</span>
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                <span>Export (.xlsx)</span>
               </button>
+
+              {rows.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearSheet}
+                  title="Make table blank (remove all rows)"
+                  className={`px-2.5 py-1.5 text-xs font-medium rounded-lg border flex items-center gap-1 transition active:scale-95 cursor-pointer shadow-xs ${
+                    isDarkMode
+                      ? 'bg-slate-800 hover:bg-rose-950/60 text-rose-300 border-slate-700 hover:border-rose-700'
+                      : 'bg-white hover:bg-rose-50 text-rose-700 border-slate-200 hover:border-rose-300'
+                  }`}
+                >
+                  <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                  <span>Blank</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -751,8 +808,83 @@ export default function App() {
               }`}>
                 {filteredRows.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className={`py-12 text-center ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                      No rows found. Try clearing your search or capture a new photo.
+                    <td colSpan={10} className="py-14 px-4 text-center">
+                      {rows.length === 0 ? (
+                        <div className="max-w-md mx-auto flex flex-col items-center justify-center text-center">
+                          <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-3.5 shadow-sm border ${
+                            isDarkMode
+                              ? 'bg-slate-900 border-slate-700 text-emerald-400'
+                              : 'bg-emerald-50 border-emerald-200 text-emerald-600'
+                          }`}>
+                            <FileSpreadsheet className="w-7 h-7" />
+                          </div>
+                          <h3 className={`text-base font-bold mb-1 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>
+                            Spreadsheet is Blank (Khali Sheet)
+                          </h3>
+                          <p className={`text-xs mb-5 max-w-sm font-sans ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                            Aap nayi notebook slip photo click kar sakte hain, image upload kar sakte hain, ya manually entry add kar sakte hain.
+                          </p>
+                          <div className="flex flex-wrap items-center justify-center gap-2.5">
+                            <button
+                              type="button"
+                              onClick={() => setIsCameraOpen(true)}
+                              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-sm transition active:scale-95 cursor-pointer"
+                            >
+                              <Camera className="w-4 h-4" />
+                              <span>Capture Photo</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => fileInputRef.current?.click()}
+                              className={`px-3.5 py-2 text-xs font-medium rounded-lg border flex items-center gap-1.5 transition cursor-pointer shadow-xs ${
+                                isDarkMode
+                                  ? 'bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700'
+                                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                              }`}
+                            >
+                              <Upload className="w-4 h-4 text-slate-500" />
+                              <span>Upload Slip</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleAddNewRow}
+                              className={`px-3.5 py-2 text-xs font-semibold rounded-lg border flex items-center gap-1.5 transition cursor-pointer shadow-xs ${
+                                isDarkMode
+                                  ? 'bg-slate-800 text-emerald-400 border-slate-700 hover:bg-slate-700'
+                                  : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                              }`}
+                            >
+                              <Plus className="w-4 h-4 text-emerald-600" />
+                              <span>+ Add Blank Row</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={loadSampleSlip}
+                              className={`px-3.5 py-2 text-xs font-medium rounded-lg border flex items-center gap-1.5 transition cursor-pointer shadow-xs ${
+                                isDarkMode
+                                  ? 'bg-slate-800 text-slate-300 border-slate-700 hover:text-white'
+                                  : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
+                              }`}
+                            >
+                              <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
+                              <span>Load Demo Slip</span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="py-6 font-sans">
+                          <p className={`text-sm ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                            No rows found matching "{searchQuery}".
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setSearchQuery('')}
+                            className="mt-2 text-xs text-emerald-600 hover:underline font-semibold cursor-pointer"
+                          >
+                            Clear Search Filter
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ) : (
