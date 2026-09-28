@@ -26,16 +26,15 @@ function createFormattedSheet(rows: InventoryRow[], label: string) {
   ];
 
   const dataRows = rows.map((row, index) => {
-    const fullCode = row.fullCode || `${row.prefix}-${row.itemCode}`;
-    const partCodeWithYear = `${fullCode}--${row.year}`;
+    const partCodeWithYear = formatProductCodeWithUnit(row);
     const unit = row.ageType || getAgeUnit(row.year);
 
     return [
       index + 1,
       row.prefix,
       row.itemCode,
-      partCodeWithYear, // Joined D and E with '--'
-      unit,             // Column added right before Qty: 'months' or 'year'
+      partCodeWithYear, // e.g. PSUT-202--5-6years
+      unit,             // Column: months or years
       Number(row.quantity) || 1,
       row.binNumber,
     ];
@@ -194,11 +193,11 @@ export async function copyForExcelClipboard(rows: InventoryRow[]): Promise<boole
  * Product Code* | Quantity* | Shelf Code* | Adjustment Type* | Inventory Type | Transfer to Shelf Code | Sla | Source Batch Code | Remarks | Force Allocate
  *
  * Rules:
- * - Product Code*: e.g. PSUT-202--4-5-Years (or PSUT-202--6-12-Months)
+ * - Product Code*: e.g. PSUT-202--5-6years (or PSUT-202--6-12months)
  * - Quantity*: row.quantity
  * - Shelf Code*: 2770 -> U-2770 (adds 'U-' prefix if not already present)
- * - Adjustment Type*: Add (or configured)
- * - Inventory Type*: (or blank / standard as required)
+ * - Adjustment Type*: ""
+ * - Inventory Type*: "Add"
  * - Transfer to Shelf Code: ""
  * - Sla: ""
  * - Source Batch Code: ""
@@ -210,16 +209,13 @@ export function formatProductCodeWithUnit(row: InventoryRow): string {
   const itemCode = row.itemCode || '';
   const rawYear = String(row.year || '').trim();
   const unit = (row.ageType || getAgeUnit(rawYear)).toLowerCase();
-  const unitSuffix = unit === 'months' ? 'Months' : 'Years';
+  const unitSuffix = unit === 'months' ? 'months' : 'years';
 
-  // Capitalize format e.g. 4-5-Years or 0-3-Months
-  let yearPart = rawYear;
-  // If year doesn't end with Months/Years, format as {year}-{Years/Months}
-  if (!yearPart.toLowerCase().endsWith('years') && !yearPart.toLowerCase().endsWith('months')) {
-    yearPart = yearPart ? `${yearPart}-${unitSuffix}` : unitSuffix;
-  }
+  // Merge year and age directly e.g. "5-6years" or "0-3months"
+  let cleanYear = rawYear.replace(/[\s\-_]*(years?|months?)$/i, '').trim();
+  const mergedYearAge = cleanYear ? `${cleanYear}${unitSuffix}` : unitSuffix;
 
-  return `${prefix}-${itemCode}--${yearPart}`;
+  return `${prefix}-${itemCode}--${mergedYearAge}`;
 }
 
 export function formatShelfCode(binNumber: string | undefined): string {

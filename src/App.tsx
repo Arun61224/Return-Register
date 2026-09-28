@@ -974,7 +974,7 @@ export default function App() {
                   <th className="py-2.5 px-3 w-56">
                     Product Code*
                     <span className={`block text-[10px] font-normal normal-case ${isDarkMode ? 'text-emerald-400' : 'text-emerald-700'}`}>
-                      e.g. PSUT-202--4-5-Years
+                      e.g. PSUT-202--5-6years
                     </span>
                   </th>
                   <th className="py-2.5 px-3 w-20 text-center">
@@ -1151,7 +1151,7 @@ export default function App() {
                           />
                         </td>
 
-                        {/* Product Code* (e.g. PSUT-202--4-5-Years) */}
+                        {/* Product Code* (e.g. PSUT-202--5-6years) */}
                         <td className="py-2.5 px-3">
                           <div className="flex items-center gap-1.5 font-mono">
                             <span className={`font-bold text-xs whitespace-nowrap px-1.5 py-0.5 rounded border ${
@@ -1159,7 +1159,7 @@ export default function App() {
                                 ? 'text-emerald-400 bg-emerald-950/30 border-emerald-800/40'
                                 : 'text-emerald-800 bg-emerald-50 border-emerald-200/80'
                             }`}>
-                              {row.fullCode || `${row.prefix}-${row.itemCode}`}--{row.year ? `${row.year}-${currentUnit === 'months' ? 'Months' : 'Years'}` : currentUnit === 'months' ? 'Months' : 'Years'}
+                              {row.fullCode || `${row.prefix}-${row.itemCode}`}--{row.year ? `${row.year.replace(/[\s\-_]*(years?|months?)$/i, '').trim()}${currentUnit === 'months' ? 'months' : 'years'}` : currentUnit === 'months' ? 'months' : 'years'}
                             </span>
                             <span className={`text-[10px] font-normal ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
                               (
