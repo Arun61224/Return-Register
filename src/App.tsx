@@ -14,6 +14,7 @@ import {
   Sun,
   Moon,
   Search,
+  Crop,
 } from 'lucide-react';
 
 import { InventoryRow, DuplicateWarning, SlipExtractionResult, SectionSummary } from './types/inventory';
@@ -23,6 +24,7 @@ import { normalizePrefix } from './utils/prefixClassifier';
 import { CameraCapture } from './components/CameraCapture';
 import { DuplicateResolverModal } from './components/DuplicateResolverModal';
 import { SlipImageModal } from './components/SlipImageModal';
+import { ImageCropperModal } from './components/ImageCropperModal';
 
 export default function App() {
   const [rows, setRows] = useState<InventoryRow[]>([]);
@@ -41,6 +43,7 @@ export default function App() {
   const [isCameraOpen, setIsCameraOpen] = useState<boolean>(false);
   const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState<boolean>(false);
   const [isImageModalOpen, setIsImageModalOpen] = useState<boolean>(false);
+  const [isCropperOpen, setIsCropperOpen] = useState<boolean>(false);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(false);
 
   // Filter & Search
@@ -479,13 +482,30 @@ export default function App() {
               }}
             />
 
+            {/* Crop & Adjust Slip (if loaded) */}
+            {currentImage && (
+              <button
+                type="button"
+                onClick={() => setIsCropperOpen(true)}
+                title="Crop or rotate slip photo"
+                className={`px-2.5 py-2 text-xs rounded-lg border transition cursor-pointer flex items-center gap-1.5 shadow-xs ${
+                  isDarkMode
+                    ? 'bg-emerald-950/60 text-emerald-300 border-emerald-800/60 hover:bg-emerald-900/50'
+                    : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                }`}
+              >
+                <Crop className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Crop Slip</span>
+              </button>
+            )}
+
             {/* Inspect Photo (if loaded) */}
             {currentImage && (
               <button
                 type="button"
                 onClick={() => setIsImageModalOpen(true)}
                 title="View uploaded slip photo"
-                className={`px-2.5 py-2 text-xs rounded-lg border transition cursor-pointer flex items-center gap-1 ${
+                className={`px-2.5 py-2 text-xs rounded-lg border transition cursor-pointer flex items-center gap-1 shadow-xs ${
                   isDarkMode
                     ? 'bg-indigo-950/60 text-indigo-300 border-indigo-800/60 hover:bg-indigo-900/50'
                     : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
@@ -982,6 +1002,16 @@ export default function App() {
         onClose={() => setIsImageModalOpen(false)}
         detectedBin={detectedBin}
         detectedPrefix={detectedPrefix}
+      />
+
+      {/* Interactive Image Cropper Modal */}
+      <ImageCropperModal
+        isOpen={isCropperOpen}
+        imageSrc={currentImage}
+        onClose={() => setIsCropperOpen(false)}
+        onApplyCrop={(croppedBase64) => {
+          processSlipImage(croppedBase64);
+        }}
       />
     </div>
   );

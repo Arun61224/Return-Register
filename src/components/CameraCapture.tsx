@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Camera, RefreshCw, X, Check, AlertCircle, SwitchCamera } from 'lucide-react';
+import { Camera, RefreshCw, X, Check, AlertCircle, SwitchCamera, Crop, RotateCw } from 'lucide-react';
+import { ImageCropperModal } from './ImageCropperModal';
 
 interface CameraCaptureProps {
   isOpen: boolean;
@@ -17,6 +18,7 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ isOpen, onClose, o
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isStartingCamera, setIsStartingCamera] = useState<boolean>(false);
   const [hasMultipleCameras, setHasMultipleCameras] = useState<boolean>(false);
+  const [isCropperOpen, setIsCropperOpen] = useState<boolean>(false);
 
   // Stop camera tracks helper
   const stopStream = useCallback(() => {
@@ -113,6 +115,28 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ isOpen, onClose, o
   const handleRetake = () => {
     setCapturedImage(null);
     startCamera();
+  };
+
+  const handleRotateCaptured = () => {
+    if (!capturedImage) return;
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.height;
+      c.height = img.width;
+      const ctx = c.getContext('2d');
+      if (!ctx) return;
+      ctx.translate(c.width / 2, c.height / 2);
+      ctx.rotate((90 * Math.PI) / 180);
+      ctx.drawImage(img, -img.width / 2, -img.height / 2);
+      setCapturedImage(c.toDataURL('image/jpeg', 0.94));
+    };
+    img.src = capturedImage;
+  };
+
+  const handleApplyCroppedImage = (croppedBase64: string) => {
+    setCapturedImage(croppedBase64);
+    setIsCropperOpen(false);
   };
 
   const handleConfirm = () => {
@@ -225,20 +249,38 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ isOpen, onClose, o
             )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2.5">
             {capturedImage ? (
               <>
                 <button
                   type="button"
                   onClick={handleRetake}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-medium rounded-lg flex items-center gap-1.5 transition border border-slate-700 cursor-pointer"
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs sm:text-sm font-medium rounded-lg flex items-center gap-1.5 transition border border-slate-700 cursor-pointer"
                 >
-                  <RefreshCw className="w-4 h-4" /> Retake
+                  <RefreshCw className="w-3.5 h-3.5" /> Retake
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRotateCaptured}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs sm:text-sm font-medium rounded-lg flex items-center gap-1.5 transition border border-slate-700 cursor-pointer"
+                  title="Rotate 90°"
+                >
+                  <RotateCw className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Rotate</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsCropperOpen(true)}
+                  className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs sm:text-sm font-medium rounded-lg flex items-center gap-1.5 transition border border-emerald-500/40 hover:border-emerald-500 text-emerald-300 cursor-pointer"
+                  title="Crop specific quadrant or remove borders"
+                >
+                  <Crop className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Crop Photo</span>
                 </button>
                 <button
                   type="button"
                   onClick={handleConfirm}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg flex items-center gap-1.5 transition shadow-lg shadow-emerald-900/40 cursor-pointer"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs sm:text-sm font-medium rounded-lg flex items-center gap-1.5 transition shadow-lg shadow-emerald-900/40 cursor-pointer"
                 >
                   <Check className="w-4 h-4" /> Convert to Excel
                 </button>
@@ -256,6 +298,14 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ isOpen, onClose, o
           </div>
         </div>
       </div>
+
+      {/* Embedded Cropper Modal */}
+      <ImageCropperModal
+        isOpen={isCropperOpen}
+        imageSrc={capturedImage}
+        onClose={() => setIsCropperOpen(false)}
+        onApplyCrop={handleApplyCroppedImage}
+      />
     </div>
   );
 };
