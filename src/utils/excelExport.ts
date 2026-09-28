@@ -205,6 +205,11 @@ export async function copyForExcelClipboard(rows: InventoryRow[]): Promise<boole
  * - Force Allocate: ""
  */
 export function formatProductCodeWithUnit(row: InventoryRow): string {
+  // If matched directly with Master SKU from Google Sheet, use that official Master SKU!
+  if (row.matchedSku && row.matchedSku.trim()) {
+    return row.matchedSku.trim();
+  }
+
   const prefix = row.prefix || 'TSUT';
   const itemCode = row.itemCode || '';
   const rawYear = String(row.year || '').trim();

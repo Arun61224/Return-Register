@@ -19,6 +19,8 @@ import {
   Plus,
   Layers,
   Images,
+  Database,
+  ExternalLink,
 } from 'lucide-react';
 
 import { InventoryRow, DuplicateWarning, SlipExtractionResult, SectionSummary } from './types/inventory';
@@ -59,8 +61,45 @@ export default function App() {
   const [selectedSectionFilter, setSelectedSectionFilter] = useState<number | 'all'>('all');
   const [filterDuplicateOnly, setFilterDuplicateOnly] = useState<boolean>(false);
 
+  // Master SKU Google Sheet Sync State
+  const [masterSkuCount, setMasterSkuCount] = useState<number | null>(null);
+  const [isSyncingMasterSkus, setIsSyncingMasterSkus] = useState<boolean>(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const multiFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Fetch initial master SKU status
+  useEffect(() => {
+    fetch('/api/master-skus/status')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && typeof data.totalCount === 'number') {
+          setMasterSkuCount(data.totalCount);
+        }
+      })
+      .catch((err) => console.warn('Could not fetch initial SKU status:', err));
+  }, []);
+
+  const refreshMasterSkus = async () => {
+    setIsSyncingMasterSkus(true);
+    setSyncMessage(null);
+    try {
+      const res = await fetch('/api/master-skus/refresh', { method: 'POST' });
+      const data = await res.json();
+      if (data.success) {
+        setMasterSkuCount(data.totalCount);
+        setSyncMessage(`Synced ${data.totalCount.toLocaleString()} SKUs from Google Sheet!`);
+        setTimeout(() => setSyncMessage(null), 4000);
+      } else {
+        setSyncMessage('Failed to sync master SKUs.');
+      }
+    } catch (_err) {
+      setSyncMessage('Network error syncing Google Sheet.');
+    } finally {
+      setIsSyncingMasterSkus(false);
+    }
+  };
 
   // Load sample slip automatically on mount (now preloaded with full 4-section data)
   useEffect(() => {
@@ -267,6 +306,9 @@ export default function App() {
             isCarryForward: Boolean(row.isCarryForward),
             carryForwardFrom: row.carryForwardFrom || '',
             isDuplicate: false,
+            matchedSku: row.matchedSku,
+            skuCandidates: row.skuCandidates,
+            skuStatus: row.skuStatus,
           };
         });
 
@@ -336,6 +378,9 @@ export default function App() {
         isCarryForward: Boolean(row.isCarryForward),
         carryForwardFrom: row.carryForwardFrom || '',
         isDuplicate: false,
+        matchedSku: row.matchedSku,
+        skuCandidates: row.skuCandidates,
+        skuStatus: row.skuStatus,
       };
     });
 
@@ -713,6 +758,46 @@ export default function App() {
               </button>
             )}
 
+            {/* Google Sheet Master SKU Sync */}
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={refreshMasterSkus}
+                disabled={isSyncingMasterSkus}
+                title="Click to refresh Master SKUs from Google Sheet"
+                className={`px-3 py-2 text-xs font-semibold rounded-lg border transition cursor-pointer flex items-center gap-1.5 shadow-xs ${
+                  isSyncingMasterSkus
+                    ? 'opacity-70 cursor-wait'
+                    : isDarkMode
+                      ? 'bg-emerald-950/40 hover:bg-emerald-900/50 text-emerald-300 border-emerald-800/60'
+                      : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                }`}
+              >
+                <Database className={`w-3.5 h-3.5 text-emerald-600 ${isSyncingMasterSkus ? 'animate-spin' : ''}`} />
+                <span>
+                  {isSyncingMasterSkus
+                    ? 'Syncing Sheet...'
+                    : masterSkuCount
+                      ? `Master SKUs (${masterSkuCount.toLocaleString()})`
+                      : 'Sync Master SKUs'}
+                </span>
+                <RefreshCw className={`w-3 h-3 text-slate-400 ${isSyncingMasterSkus ? 'animate-spin' : ''}`} />
+              </button>
+              <a
+                href="https://docs.google.com/spreadsheets/d/19THmGjzWHJ-G-u0FEoiOBray5ita7OPPXtJaWIu7Hm8/edit?usp=sharing"
+                target="_blank"
+                rel="noreferrer"
+                title="Open Google Sheet in new tab"
+                className={`p-2 rounded-lg border transition ${
+                  isDarkMode
+                    ? 'bg-slate-800 hover:bg-slate-700 text-slate-400 border-slate-700'
+                    : 'bg-white hover:bg-slate-50 text-slate-500 border-slate-300'
+                }`}
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+
             {/* Blank Sheet (Clear Table) */}
             <button
               type="button"
@@ -762,6 +847,22 @@ export default function App() {
 
       {/* Main Container */}
       <main className="max-w-7xl mx-auto w-full px-4 lg:px-8 py-6 flex-1 flex flex-col gap-4">
+        {/* Sync notification toast */}
+        {syncMessage && (
+          <div className="bg-emerald-600 text-white text-xs px-4 py-2.5 rounded-xl shadow-md flex items-center justify-between animate-fade-in font-medium">
+            <div className="flex items-center gap-2">
+              <Check className="w-4 h-4" />
+              <span>{syncMessage}</span>
+            </div>
+            <button
+              onClick={() => setSyncMessage(null)}
+              className="text-emerald-100 hover:text-white cursor-pointer text-xs"
+            >
+              ✕
+            </button>
+          </div>
+        )}
+
         {/* Loading State Banner */}
         {isLoading && (
           <div className={`border rounded-xl p-4 flex flex-col gap-2 shadow-xs ${
@@ -1151,31 +1252,57 @@ export default function App() {
                           />
                         </td>
 
-                        {/* Product Code* (e.g. PSUT-202--5-6years) */}
+                        {/* Product Code* (Auto-Matched with Google Sheet Master SKU) */}
                         <td className="py-2.5 px-3">
-                          <div className="flex items-center gap-1.5 font-mono">
-                            <span className={`font-bold text-xs whitespace-nowrap px-1.5 py-0.5 rounded border ${
-                              isDarkMode
-                                ? 'text-emerald-400 bg-emerald-950/30 border-emerald-800/40'
-                                : 'text-emerald-800 bg-emerald-50 border-emerald-200/80'
-                            }`}>
-                              {row.fullCode || `${row.prefix}-${row.itemCode}`}--{row.year ? `${row.year.replace(/[\s\-_]*(years?|months?)$/i, '').trim()}${currentUnit === 'months' ? 'months' : 'years'}` : currentUnit === 'months' ? 'months' : 'years'}
-                            </span>
-                            <span className={`text-[10px] font-normal ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                              (
-                              <input
-                                type="text"
-                                title="Edit Year / Age"
-                                value={row.year}
-                                onChange={(e) => updateRowField(row.id, 'year', e.target.value)}
-                                className={`w-10 px-1 py-0.5 rounded border text-center font-mono focus:outline-none ${
+                          <div className="flex flex-col gap-1 font-mono">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`font-bold text-xs whitespace-nowrap px-1.5 py-0.5 rounded border ${
+                                row.matchedSku
+                                  ? isDarkMode
+                                    ? 'text-emerald-300 bg-emerald-950/60 border-emerald-600/60'
+                                    : 'text-emerald-900 bg-emerald-100/80 border-emerald-300 font-extrabold'
+                                  : isDarkMode
+                                    ? 'text-emerald-400 bg-emerald-950/30 border-emerald-800/40'
+                                    : 'text-emerald-800 bg-emerald-50 border-emerald-200/80'
+                              }`}>
+                                {row.matchedSku || (row.fullCode || `${row.prefix}-${row.itemCode}`) + '--' + (row.year ? `${row.year.replace(/[\s\-_]*(years?|months?)$/i, '').trim()}${currentUnit === 'months' ? 'months' : 'years'}` : currentUnit === 'months' ? 'months' : 'years')}
+                              </span>
+                              <span className={`text-[10px] font-normal ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                                (
+                                <input
+                                  type="text"
+                                  title="Edit Year / Age"
+                                  value={row.year}
+                                  onChange={(e) => updateRowField(row.id, 'year', e.target.value)}
+                                  className={`w-10 px-1 py-0.5 rounded border text-center font-mono focus:outline-none ${
+                                    isDarkMode
+                                      ? 'bg-slate-950 border-slate-700 text-sky-300 focus:border-emerald-500'
+                                      : 'bg-white border-slate-300 text-slate-800 focus:border-emerald-600'
+                                  }`}
+                                />
+                                )
+                              </span>
+                            </div>
+
+                            {/* Dropdown if multiple Master SKU candidates exist in Google Sheet */}
+                            {row.skuCandidates && row.skuCandidates.length > 1 && (
+                              <select
+                                value={row.matchedSku || ''}
+                                onChange={(e) => updateRowField(row.id, 'matchedSku', e.target.value)}
+                                className={`text-[10px] px-1 py-0.5 rounded border font-mono truncate max-w-[240px] focus:outline-none ${
                                   isDarkMode
-                                    ? 'bg-slate-950 border-slate-700 text-sky-300 focus:border-emerald-500'
-                                    : 'bg-white border-slate-300 text-slate-800 focus:border-emerald-600'
+                                    ? 'bg-slate-950 border-slate-700 text-slate-300'
+                                    : 'bg-slate-50 border-slate-300 text-slate-700'
                                 }`}
-                              />
-                              )
-                            </span>
+                                title="Multiple brands found in Google Sheet. Click to select brand."
+                              >
+                                {row.skuCandidates.map((cand) => (
+                                  <option key={cand} value={cand}>
+                                    {cand}
+                                  </option>
+                                ))}
+                              </select>
+                            )}
                           </div>
                         </td>
 
@@ -1266,9 +1393,22 @@ export default function App() {
                           </div>
                         </td>
 
-                        {/* Slip Status Badge / Carry forward indicator */}
+                        {/* Slip Status Badge / Carry forward indicator / Master SKU match */}
                         <td className="py-2.5 px-3">
                           <div className="flex flex-wrap items-center gap-1.5">
+                            {row.matchedSku && (
+                              <span
+                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-sans font-semibold border ${
+                                  isDarkMode
+                                    ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/50'
+                                    : 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                }`}
+                                title="Exact Master SKU matched with Google Sheet"
+                              >
+                                <Check className="w-2.5 h-2.5 text-emerald-600" />
+                                <span>Sheet Matched</span>
+                              </span>
+                            )}
                             {row.isCarryForward ? (
                               <span
                                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-sans border ${
@@ -1282,9 +1422,11 @@ export default function App() {
                                 <span>Inherited Blank ({row.carryForwardFrom || row.itemCode})</span>
                               </span>
                             ) : (
-                              <span className={`text-[10px] font-sans ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                                Written
-                              </span>
+                              !row.matchedSku && (
+                                <span className={`text-[10px] font-sans ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                                  Written
+                                </span>
+                              )
                             )}
                           </div>
                         </td>

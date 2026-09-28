@@ -14,6 +14,9 @@ export interface InventoryRow {
   isDuplicate?: boolean;
   sectionIndex?: number;
   sectionName?: string;
+  matchedSku?: string;
+  skuCandidates?: string[];
+  skuStatus?: 'matched' | 'multiple' | 'unmatched';
 }
 
 export interface DuplicateWarning {

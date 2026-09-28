@@ -196,11 +196,208 @@ const SAMPLE_4_SECTION_DATA = {
   ],
 };
 
-app.get('/api/sample-slip', (_req: Request, res: Response) => {
-  const enrichedRows = SAMPLE_4_SECTION_DATA.rows.map((r) => ({
-    ...r,
-    ageType: getAgeUnit(r.year),
-  }));
+// ---------------- MASTER SKU CATALOG SYNC (Google Sheets) ----------------
+const MASTER_SHEET_URL =
+  'https://docs.google.com/spreadsheets/d/19THmGjzWHJ-G-u0FEoiOBray5ita7OPPXtJaWIu7Hm8/export?format=csv';
+
+interface MasterSkuCatalog {
+  skus: string[];
+  lastFetched: number;
+  totalCount: number;
+}
+
+let masterCatalogCache: MasterSkuCatalog | null = null;
+let isFetchingCatalog = false;
+
+async function fetchMasterSkusFromSheet(forceRefresh = false): Promise<string[]> {
+  const now = Date.now();
+  // Cache for 10 minutes unless forced
+  if (!forceRefresh && masterCatalogCache && now - masterCatalogCache.lastFetched < 10 * 60 * 1000) {
+    return masterCatalogCache.skus;
+  }
+
+  if (isFetchingCatalog && masterCatalogCache) {
+    return masterCatalogCache.skus;
+  }
+
+  isFetchingCatalog = true;
+  try {
+    console.log('[MasterSKU] Fetching latest SKUs from Google Sheet...');
+    const response = await fetch(MASTER_SHEET_URL, {
+      headers: {
+        'User-Agent': 'Slip2Excel/1.0',
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch Google Sheet: HTTP ${response.status}`);
+    }
+
+    const csvText = await response.text();
+    const lines = csvText.split(/\r?\n/);
+    const skuList: string[] = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      // Skip header row if it is "Sku Code" or contains headers
+      if (i === 0 && line.toLowerCase().includes('sku')) continue;
+      const cleanSku = line.replace(/^["']|["']$/g, '').trim();
+      if (cleanSku) {
+        skuList.push(cleanSku);
+      }
+    }
+
+    masterCatalogCache = {
+      skus: skuList,
+      lastFetched: Date.now(),
+      totalCount: skuList.length,
+    };
+    console.log(`[MasterSKU] Successfully cached ${skuList.length} SKUs from Google Sheet.`);
+    return skuList;
+  } catch (err: any) {
+    console.error('[MasterSKU] Error fetching master SKUs:', err?.message || err);
+    return masterCatalogCache ? masterCatalogCache.skus : [];
+  } finally {
+    isFetchingCatalog = false;
+  }
+}
+
+// Prefetch catalog on server startup
+fetchMasterSkusFromSheet(false).catch((e) => console.warn('Prefetch error:', e));
+
+/**
+ * Match a raw prefix, itemCode, and year against master SKUs
+ * E.g. raw prefix "Tshrt", itemCode "428", year "6-7" -> matches "...-TSHRT-428--6-7Years"
+ */
+function findBestSkuMatches(
+  prefix: string,
+  itemCode: string,
+  year: string,
+  ageType: 'months' | 'years',
+  catalog: string[]
+): { matchedSku: string | null; candidates: string[]; status: 'matched' | 'multiple' | 'unmatched' } {
+  if (!catalog || catalog.length === 0 || !itemCode) {
+    return { matchedSku: null, candidates: [], status: 'unmatched' };
+  }
+
+  const cleanItem = String(itemCode).trim().toLowerCase();
+  const cleanYear = String(year || '')
+    .replace(/[\s\-_]*(years?|months?)$/i, '')
+    .trim()
+    .toLowerCase();
+
+  // Normalize prefix variations for matching (e.g. Tshrt -> tshrt, tsut -> tsut, psut -> psut)
+  const normPrefix = prefix.toLowerCase();
+  const possiblePrefixes = [normPrefix];
+  if (normPrefix === 'tshrt' || normPrefix === 'ts') {
+    possiblePrefixes.push('tshrt', 'ts');
+  } else if (normPrefix === 'tsut') {
+    possiblePrefixes.push('tsut');
+  } else if (normPrefix === 'psut') {
+    possiblePrefixes.push('psut');
+  } else if (normPrefix === 'ykts') {
+    possiblePrefixes.push('ykts', 'ykt');
+  }
+
+  const isMonths = ageType === 'months';
+
+  // Filter catalog items that match this item number and year
+  const matches: string[] = [];
+
+  for (const sku of catalog) {
+    const lowerSku = sku.toLowerCase();
+
+    // Check if itemCode is in sku as an exact part (e.g. "-428--" or "-428-")
+    const itemMatch =
+      lowerSku.includes(`-${cleanItem}--`) ||
+      lowerSku.includes(`-${cleanItem}-`) ||
+      lowerSku.endsWith(`-${cleanItem}`);
+    if (!itemMatch) continue;
+
+    // Check year part
+    if (cleanYear) {
+      const yearWithUnit = `${cleanYear}${isMonths ? 'months' : 'years'}`;
+      const yearWithHyphen = `${cleanYear}-${isMonths ? 'months' : 'years'}`;
+      if (
+        !lowerSku.includes(`--${cleanYear}`) &&
+        !lowerSku.includes(`-${cleanYear}`) &&
+        !lowerSku.includes(yearWithUnit) &&
+        !lowerSku.includes(yearWithHyphen)
+      ) {
+        continue;
+      }
+    }
+
+    // Check garment prefix match
+    const prefixMatch = possiblePrefixes.some((p) => {
+      return lowerSku.includes(`-${p}-`) || lowerSku.includes(`-${p}--`);
+    });
+
+    if (prefixMatch) {
+      matches.push(sku);
+    }
+  }
+
+  // If no prefix match found, retry with just itemCode + year match
+  if (matches.length === 0 && cleanYear) {
+    for (const sku of catalog) {
+      const lowerSku = sku.toLowerCase();
+      const itemMatch = lowerSku.includes(`-${cleanItem}--`) || lowerSku.includes(`-${cleanItem}-`);
+      if (itemMatch && lowerSku.includes(cleanYear)) {
+        matches.push(sku);
+      }
+    }
+  }
+
+  if (matches.length === 1) {
+    return { matchedSku: matches[0], candidates: matches, status: 'matched' };
+  } else if (matches.length > 1) {
+    // Prefer KUC if multiple exist (as KUC has 12,000+ items)
+    const kucMatch = matches.find((m) => m.toUpperCase().startsWith('KUC-'));
+    return {
+      matchedSku: kucMatch || matches[0],
+      candidates: matches,
+      status: 'multiple',
+    };
+  }
+
+  return { matchedSku: null, candidates: [], status: 'unmatched' };
+}
+
+app.get('/api/master-skus/status', async (_req: Request, res: Response) => {
+  const skus = await fetchMasterSkusFromSheet(false);
+  res.json({
+    success: true,
+    totalCount: skus.length,
+    lastFetched: masterCatalogCache ? new Date(masterCatalogCache.lastFetched).toISOString() : null,
+  });
+});
+
+app.post('/api/master-skus/refresh', async (_req: Request, res: Response) => {
+  const skus = await fetchMasterSkusFromSheet(true);
+  res.json({
+    success: true,
+    totalCount: skus.length,
+    lastFetched: masterCatalogCache ? new Date(masterCatalogCache.lastFetched).toISOString() : null,
+    message: `Refreshed successfully! Loaded ${skus.length} SKUs from Google Sheet.`,
+  });
+});
+
+app.get('/api/sample-slip', async (_req: Request, res: Response) => {
+  const masterSkus = await fetchMasterSkusFromSheet(false);
+
+  const enrichedRows = SAMPLE_4_SECTION_DATA.rows.map((r) => {
+    const ageUnit = getAgeUnit(r.year);
+    const skuResult = findBestSkuMatches(r.prefix, r.itemCode, r.year, ageUnit, masterSkus);
+    return {
+      ...r,
+      ageType: ageUnit,
+      matchedSku: skuResult.matchedSku || undefined,
+      skuCandidates: skuResult.candidates,
+      skuStatus: skuResult.status,
+    };
+  });
 
   res.json({
     success: true,
@@ -408,7 +605,10 @@ Extract all rows from all sections systematically. Return strictly JSON matching
     const parsedJsonText = response.text?.trim() || '{}';
     const result = JSON.parse(parsedJsonText);
 
-    // Number rows sequentially, normalize prefixes and assign IDs
+    // Fetch or use cached master SKUs from Google Sheet
+    const masterSkus = await fetchMasterSkusFromSheet(false);
+
+    // Number rows sequentially, normalize prefixes, match with Master SKUs and assign IDs
     if (result.rows && Array.isArray(result.rows)) {
       result.rows = result.rows.map((row: any, idx: number) => {
         const normalizedPrefix = normalizePrefix(row.prefix || defaultPrefix);
@@ -421,6 +621,17 @@ Extract all rows from all sections systematically. Return strictly JSON matching
         }
 
         const fullCode = `${normalizedPrefix}-${cleanItemCode}`;
+        const yearStr = String(row.year || '');
+        const ageUnit = getAgeUnit(yearStr);
+
+        // Find matches in Master Sheet
+        const skuMatchResult = findBestSkuMatches(
+          normalizedPrefix,
+          cleanItemCode,
+          yearStr,
+          ageUnit,
+          masterSkus
+        );
 
         return {
           id: `row-${Date.now()}-${idx + 1}`,
@@ -431,12 +642,15 @@ Extract all rows from all sections systematically. Return strictly JSON matching
           prefix: normalizedPrefix,
           itemCode: cleanItemCode,
           fullCode,
-          year: String(row.year || ''),
-          ageType: getAgeUnit(String(row.year || '')),
+          year: yearStr,
+          ageType: ageUnit,
           quantity: typeof row.quantity === 'number' ? row.quantity : parseInt(row.quantity, 10) || 1,
           binNumber: String(row.binNumber || ''),
           isCarryForward: Boolean(row.isCarryForward),
           carryForwardFrom: row.carryForwardFrom || '',
+          matchedSku: skuMatchResult.matchedSku || undefined,
+          skuCandidates: skuMatchResult.candidates,
+          skuStatus: skuMatchResult.status,
         };
       });
     }
