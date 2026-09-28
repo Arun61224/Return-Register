@@ -21,6 +21,7 @@ import { InventoryRow, DuplicateWarning, SlipExtractionResult, SectionSummary } 
 import { exportToExcel, copyForExcelClipboard, downloadCSV } from './utils/excelExport';
 import { getAgeUnit } from './utils/ageClassifier';
 import { normalizePrefix } from './utils/prefixClassifier';
+import { compressImageForUpload } from './utils/imageCompressor';
 import { CameraCapture } from './components/CameraCapture';
 import { DuplicateResolverModal } from './components/DuplicateResolverModal';
 import { SlipImageModal } from './components/SlipImageModal';
@@ -129,8 +130,14 @@ export default function App() {
 
     try {
       const response = await fetch('/api/sample-slip');
-      const data = await response.json();
-      if (data.success && data.data) {
+      const text = await response.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(text);
+      } catch (_e) {
+        console.warn('Sample slip endpoint returned non-JSON:', text.slice(0, 100));
+      }
+      if (data && data.success && data.data) {
         applyExtractionResult(data.data, null);
       }
     } catch (err: any) {
@@ -145,9 +152,13 @@ export default function App() {
   const processSlipImage = async (base64Image: string) => {
     setIsLoading(true);
     setErrorMessage(null);
-    setLoadingStep('Detecting page quadrants & handwritten sections...');
+    setLoadingStep('Optimizing photo for mobile scanning...');
 
     try {
+      // Step 1: Optimize and compress image (prevents Vercel 4.5MB payload limit & Safari memory issues)
+      const optimizedBase64 = await compressImageForUpload(base64Image, 1600, 0.88);
+
+      setLoadingStep('Detecting page quadrants & handwritten sections...');
       setTimeout(() => setLoadingStep('Extracting Section 1 (Top-Left) & Section 2 (Top-Right)...'), 1500);
       setTimeout(() => setLoadingStep('Extracting Section 3 (Bottom-Left) & Section 4 (Bottom-Right)...'), 3000);
       setTimeout(() => setLoadingStep('Reading bin numbers [2162], [2352], [2342], [2300]...'), 4500);
@@ -158,18 +169,33 @@ export default function App() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          imageBase64: base64Image,
+          imageBase64: optimizedBase64,
           defaultPrefix: 'TSUT',
         }),
       });
 
-      const json = await response.json();
+      // Defensively parse text to avoid Safari "The string did not match the expected pattern" error
+      const responseText = await response.text();
+      let json: any = null;
 
-      if (!response.ok || !json.success) {
-        throw new Error(json.error || 'Failed to process slip image.');
+      try {
+        json = JSON.parse(responseText);
+      } catch (_parseErr) {
+        console.error('Non-JSON response received from /api/extract-slip:', responseText.slice(0, 300));
+        if (response.status === 413 || responseText.includes('Payload Too Large')) {
+          throw new Error('Image size is too large for the mobile network. Please use the Crop button to select just the slip area.');
+        }
+        if (responseText.includes('<!DOCTYPE') || responseText.includes('<html')) {
+          throw new Error('Backend API returned HTML instead of JSON. If deployed on Vercel, please make sure GEMINI_API_KEY environment variable is configured in Vercel settings.');
+        }
+        throw new Error(`Server returned status ${response.status}: ${responseText.slice(0, 100)}`);
       }
 
-      applyExtractionResult(json.data, base64Image);
+      if (!response.ok || !json?.success) {
+        throw new Error(json?.error || `Failed to process slip image (HTTP ${response.status}).`);
+      }
+
+      applyExtractionResult(json.data, optimizedBase64);
     } catch (err: any) {
       console.error('OCR Error:', err);
       setErrorMessage(
@@ -238,20 +264,28 @@ export default function App() {
     recalculateDuplicates(formattedRows);
   };
 
-  const handleFileUpload = (file: File) => {
+  const handleFileUpload = async (file: File) => {
     if (!file.type.startsWith('image/')) {
       setErrorMessage('Please upload a valid image file (JPG, PNG, JPEG).');
       return;
     }
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const base64 = e.target?.result as string;
-      if (base64) {
-        processSlipImage(base64);
-      }
-    };
-    reader.readAsDataURL(file);
+    try {
+      setIsLoading(true);
+      setLoadingStep('Compressing photo for fast mobile upload...');
+      const optimizedBase64 = await compressImageForUpload(file, 1600, 0.88);
+      processSlipImage(optimizedBase64);
+    } catch (err: any) {
+      console.error('File compression fallback:', err);
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const base64 = e.target?.result as string;
+        if (base64) {
+          processSlipImage(base64);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   // Inline Row Editor

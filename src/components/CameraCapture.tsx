@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Camera, RefreshCw, X, Check, AlertCircle, SwitchCamera, Crop, RotateCw } from 'lucide-react';
 import { ImageCropperModal } from './ImageCropperModal';
+import { compressImageForUpload } from '../utils/imageCompressor';
 
 interface CameraCaptureProps {
   isOpen: boolean;
@@ -200,8 +201,26 @@ export const CameraCapture: React.FC<CameraCaptureProps> = ({ isOpen, onClose, o
                 >
                   <RefreshCw className="w-4 h-4" /> Try Again
                 </button>
+                <label className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium rounded-lg flex items-center justify-center gap-2 transition cursor-pointer border border-slate-700">
+                  <Camera className="w-4 h-4 text-emerald-400" />
+                  <span>Open Phone Camera</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        compressImageForUpload(file).then((b64) => {
+                          setCapturedImage(b64);
+                        });
+                      }
+                    }}
+                  />
+                </label>
                 <p className="text-xs text-slate-500">
-                  Tip: You can also upload or paste an image directly!
+                  Tip: You can take a photo directly with your phone camera app!
                 </p>
               </div>
             </div>
