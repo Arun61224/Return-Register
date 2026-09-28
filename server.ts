@@ -267,8 +267,40 @@ async function fetchMasterSkusFromSheet(forceRefresh = false): Promise<string[]>
 fetchMasterSkusFromSheet(false).catch((e) => console.warn('Prefetch error:', e));
 
 /**
+ * List of ordered fallback age alternatives when a specific age is missing in the master catalog.
+ * E.g. For "1-2years" (12-24 months):
+ * Priority: 18-24months -> 12-18months -> 2-3years -> 9-12months
+ */
+const AGE_NEAR_FALLBACKS: Record<string, string[]> = {
+  // 1-2 years
+  '1-2': ['18-24', '12-18', '2-3', '9-12'],
+  '1-2years': ['18-24months', '12-18months', '2-3years', '9-12months'],
+  // 12-18 months
+  '12-18': ['18-24', '1-2', '9-12', '2-3'],
+  // 18-24 months
+  '18-24': ['1-2', '12-18', '2-3'],
+  // 2-3 years
+  '2-3': ['1-2', '18-24', '3-4'],
+  // 3-4 years
+  '3-4': ['2-3', '4-5'],
+  // 4-5 years
+  '4-5': ['3-4', '5-6'],
+  // 5-6 years
+  '5-6': ['4-5', '6-7'],
+  // 6-7 years
+  '6-7': ['5-6', '7-8'],
+  // 6-12 months
+  '6-12': ['3-6', '9-12', '12-18'],
+  // 0-3 months
+  '0-3': ['3-6', '0-6'],
+  // 3-6 months
+  '3-6': ['0-3', '6-12', '6-9'],
+};
+
+/**
  * Match a raw prefix, itemCode, and year against master SKUs
- * E.g. raw prefix "Tshrt", itemCode "428", year "6-7" -> matches "...-TSHRT-428--6-7Years"
+ * If exact year is not available (e.g. 1-2years for 638), falls back to nearby age
+ * priority: 18-24months -> 12-18months -> 2-3years
  */
 function findBestSkuMatches(
   prefix: string,
@@ -276,7 +308,12 @@ function findBestSkuMatches(
   year: string,
   ageType: 'months' | 'years',
   catalog: string[]
-): { matchedSku: string | null; candidates: string[]; status: 'matched' | 'multiple' | 'unmatched' } {
+): {
+  matchedSku: string | null;
+  candidates: string[];
+  status: 'matched' | 'multiple' | 'unmatched';
+  isNearbyMatch?: boolean;
+} {
   if (!catalog || catalog.length === 0 || !itemCode) {
     return { matchedSku: null, candidates: [], status: 'unmatched' };
   }
@@ -302,64 +339,86 @@ function findBestSkuMatches(
 
   const isMonths = ageType === 'months';
 
-  // Filter catalog items that match this item number and year
-  const matches: string[] = [];
-
-  for (const sku of catalog) {
-    const lowerSku = sku.toLowerCase();
-
-    // Check if itemCode is in sku as an exact part (e.g. "-428--" or "-428-")
-    const itemMatch =
-      lowerSku.includes(`-${cleanItem}--`) ||
-      lowerSku.includes(`-${cleanItem}-`) ||
-      lowerSku.endsWith(`-${cleanItem}`);
-    if (!itemMatch) continue;
-
-    // Check year part
-    if (cleanYear) {
-      const yearWithUnit = `${cleanYear}${isMonths ? 'months' : 'years'}`;
-      const yearWithHyphen = `${cleanYear}-${isMonths ? 'months' : 'years'}`;
-      if (
-        !lowerSku.includes(`--${cleanYear}`) &&
-        !lowerSku.includes(`-${cleanYear}`) &&
-        !lowerSku.includes(yearWithUnit) &&
-        !lowerSku.includes(yearWithHyphen)
-      ) {
-        continue;
-      }
-    }
-
-    // Check garment prefix match
-    const prefixMatch = possiblePrefixes.some((p) => {
-      return lowerSku.includes(`-${p}-`) || lowerSku.includes(`-${p}--`);
-    });
-
-    if (prefixMatch) {
-      matches.push(sku);
-    }
-  }
-
-  // If no prefix match found, retry with just itemCode + year match
-  if (matches.length === 0 && cleanYear) {
+  const searchInCatalog = (targetYear: string, targetIsMonths: boolean) => {
+    const found: string[] = [];
     for (const sku of catalog) {
       const lowerSku = sku.toLowerCase();
-      const itemMatch = lowerSku.includes(`-${cleanItem}--`) || lowerSku.includes(`-${cleanItem}-`);
-      if (itemMatch && lowerSku.includes(cleanYear)) {
-        matches.push(sku);
+
+      // Check item code
+      const itemMatch =
+        lowerSku.includes(`-${cleanItem}--`) ||
+        lowerSku.includes(`-${cleanItem}-`) ||
+        lowerSku.endsWith(`-${cleanItem}`);
+      if (!itemMatch) continue;
+
+      // Check year part
+      if (targetYear) {
+        const yearWithUnit = `${targetYear}${targetIsMonths ? 'months' : 'years'}`;
+        const yearWithHyphen = `${targetYear}-${targetIsMonths ? 'months' : 'years'}`;
+        if (
+          !lowerSku.includes(`--${targetYear}`) &&
+          !lowerSku.includes(`-${targetYear}`) &&
+          !lowerSku.includes(yearWithUnit) &&
+          !lowerSku.includes(yearWithHyphen)
+        ) {
+          continue;
+        }
+      }
+
+      // Check garment prefix
+      const prefixMatch = possiblePrefixes.some((p) => {
+        return lowerSku.includes(`-${p}-`) || lowerSku.includes(`-${p}--`);
+      });
+
+      if (prefixMatch) {
+        found.push(sku);
       }
     }
-  }
 
-  if (matches.length === 1) {
-    return { matchedSku: matches[0], candidates: matches, status: 'matched' };
-  } else if (matches.length > 1) {
-    // Prefer KUC if multiple exist (as KUC has 12,000+ items)
+    // Fallback: match without strict prefix if not found
+    if (found.length === 0 && targetYear) {
+      for (const sku of catalog) {
+        const lowerSku = sku.toLowerCase();
+        const itemMatch = lowerSku.includes(`-${cleanItem}--`) || lowerSku.includes(`-${cleanItem}-`);
+        if (itemMatch && (lowerSku.includes(targetYear) || lowerSku.includes(`--${targetYear}`))) {
+          found.push(sku);
+        }
+      }
+    }
+
+    return found;
+  };
+
+  // 1. Try EXACT match first
+  let matches = searchInCatalog(cleanYear, isMonths);
+
+  if (matches.length > 0) {
+    if (matches.length === 1) {
+      return { matchedSku: matches[0], candidates: matches, status: 'matched' };
+    }
     const kucMatch = matches.find((m) => m.toUpperCase().startsWith('KUC-'));
     return {
       matchedSku: kucMatch || matches[0],
       candidates: matches,
       status: 'multiple',
     };
+  }
+
+  // 2. NEARBY AGE FALLBACK (As requested by user: 18-24m -> 12-18m -> 2-3y)
+  const nearbyList = AGE_NEAR_FALLBACKS[cleanYear] || [];
+  for (const altAge of nearbyList) {
+    const isAltMonths = altAge.includes('months') || altAge === '18-24' || altAge === '12-18' || altAge === '6-12' || altAge === '3-6' || altAge === '0-3';
+    const cleanAlt = altAge.replace(/[\s\-_]*(years?|months?)$/i, '').trim();
+    const altMatches = searchInCatalog(cleanAlt, isAltMonths);
+    if (altMatches.length > 0) {
+      const kucMatch = altMatches.find((m) => m.toUpperCase().startsWith('KUC-'));
+      return {
+        matchedSku: kucMatch || altMatches[0],
+        candidates: altMatches,
+        status: 'matched',
+        isNearbyMatch: true,
+      };
+    }
   }
 
   return { matchedSku: null, candidates: [], status: 'unmatched' };
@@ -651,6 +710,7 @@ Extract all rows from all sections systematically. Return strictly JSON matching
           matchedSku: skuMatchResult.matchedSku || undefined,
           skuCandidates: skuMatchResult.candidates,
           skuStatus: skuMatchResult.status,
+          isNearbyMatch: Boolean(skuMatchResult.isNearbyMatch),
         };
       });
     }

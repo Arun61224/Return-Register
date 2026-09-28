@@ -308,6 +308,7 @@ export default function App() {
             matchedSku: row.matchedSku,
             skuCandidates: row.skuCandidates,
             skuStatus: row.skuStatus,
+            isNearbyMatch: row.isNearbyMatch,
           };
         });
 
@@ -380,6 +381,7 @@ export default function App() {
         matchedSku: row.matchedSku,
         skuCandidates: row.skuCandidates,
         skuStatus: row.skuStatus,
+        isNearbyMatch: row.isNearbyMatch,
       };
     });
 
@@ -1398,14 +1400,22 @@ export default function App() {
                             {row.matchedSku && (
                               <span
                                 className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-sans font-semibold border ${
-                                  isDarkMode
-                                    ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/50'
-                                    : 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                  row.isNearbyMatch
+                                    ? isDarkMode
+                                      ? 'bg-amber-950/80 text-amber-300 border-amber-700/50'
+                                      : 'bg-amber-50 text-amber-800 border-amber-300'
+                                    : isDarkMode
+                                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-700/50'
+                                      : 'bg-emerald-50 text-emerald-800 border-emerald-300'
                                 }`}
-                                title="Exact Master SKU matched with Google Sheet"
+                                title={
+                                  row.isNearbyMatch
+                                    ? `Exact size nahi mila, isliye close size master SKU liya gaya: ${row.matchedSku}`
+                                    : 'Exact Master SKU matched with Google Sheet'
+                                }
                               >
-                                <Check className="w-2.5 h-2.5 text-emerald-600" />
-                                <span>Sheet Matched</span>
+                                <Check className={`w-2.5 h-2.5 ${row.isNearbyMatch ? 'text-amber-500' : 'text-emerald-600'}`} />
+                                <span>{row.isNearbyMatch ? 'Nearby Size Matched' : 'Sheet Matched'}</span>
                               </span>
                             )}
                             {row.isCarryForward ? (

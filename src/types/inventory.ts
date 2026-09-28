@@ -17,6 +17,7 @@ export interface InventoryRow {
   matchedSku?: string;
   skuCandidates?: string[];
   skuStatus?: 'matched' | 'multiple' | 'unmatched';
+  isNearbyMatch?: boolean;
 }
 
 export interface DuplicateWarning {
