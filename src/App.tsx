@@ -194,15 +194,26 @@ export default function App() {
       }
 
       if (!response.ok || !json?.success) {
-        throw new Error(json?.error || `Failed to process slip image (HTTP ${response.status}).`);
+        let rawError = json?.error || `Failed to process slip image (HTTP ${response.status}).`;
+        try {
+          const parsed = JSON.parse(rawError);
+          if (parsed?.error?.message) {
+            rawError = parsed.error.message;
+          } else if (parsed?.message) {
+            rawError = parsed.message;
+          }
+        } catch (_e) {}
+        throw new Error(rawError);
       }
 
       applyExtractionResult(json.data, optimizedBase64);
     } catch (err: any) {
       console.error('OCR Error:', err);
-      setErrorMessage(
-        err.message || 'Error scanning image. Please make sure the photo is clear or use the sample.'
-      );
+      let displayError = err?.message || 'Error scanning image. Please make sure the photo is clear or use the sample.';
+      if (displayError.includes('high demand') || displayError.includes('503') || displayError.includes('UNAVAILABLE')) {
+        displayError = 'Google AI server par temporary high demand hai. Kripya 5-10 second baad dobara "Capture Photo" dabayein.';
+      }
+      setErrorMessage(displayError);
     } finally {
       setIsLoading(false);
       setLoadingStep('');
