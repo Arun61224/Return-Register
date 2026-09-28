@@ -167,8 +167,8 @@ export async function copyForExcelClipboard(rows: InventoryRow[]): Promise<boole
         productCode,
         quantity,
         shelfCode,
-        '',
         'Add',
+        '',
         '',
         '',
         '',
@@ -196,8 +196,8 @@ export async function copyForExcelClipboard(rows: InventoryRow[]): Promise<boole
  * - Product Code*: e.g. PSUT-202--5-6years (or PSUT-202--6-12months)
  * - Quantity*: row.quantity
  * - Shelf Code*: 2770 -> U-2770 (adds 'U-' prefix if not already present)
- * - Adjustment Type*: ""
- * - Inventory Type*: "Add"
+ * - Adjustment Type*: "Add"
+ * - Inventory Type: ""
  * - Transfer to Shelf Code: ""
  * - Sla: ""
  * - Source Batch Code: ""
@@ -251,8 +251,8 @@ export function downloadCSV(rows: InventoryRow[], filename: string = 'inventory_
     const productCode = formatProductCodeWithUnit(r);
     const quantity = Number(r.quantity) || 1;
     const shelfCode = formatShelfCode(r.binNumber);
-    const adjustmentType = '';
-    const inventoryType = 'Add';
+    const adjustmentType = 'Add';
+    const inventoryType = '';
     const transferToShelfCode = '';
     const sla = '';
     const sourceBatchCode = '';

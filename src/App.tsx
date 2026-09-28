@@ -1034,7 +1034,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleDownloadCSV}
-                title="Download CSV in warehouse format (Product Code*, Quantity*, Shelf Code* U-, Adjustment Type*, etc.)"
+                title="Download CSV in warehouse format (Product Code*, Quantity*, Shelf Code* U-, Adjustment Type* = Add, etc.)"
                 className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-lg flex items-center gap-1.5 shadow-sm hover:shadow transition active:scale-95 cursor-pointer"
               >
                 <FileText className="w-3.5 h-3.5" />
