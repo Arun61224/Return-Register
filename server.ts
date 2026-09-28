@@ -534,117 +534,131 @@ CRITICAL RULES:
 Extract all rows from all sections systematically. Return strictly JSON matching the response schema.
 `;
 
+    // Primary fast & reliable model: gemini-3.1-flash-lite
+    // Fallbacks: gemini-flash-latest, gemini-3.8-flash
     const candidateModels = [
-      'gemini-2.5-flash',
+      'gemini-3.1-flash-lite',
       'gemini-flash-latest',
       'gemini-3.8-flash',
-      'gemini-3.1-flash-lite',
     ];
 
     let response: any = null;
     let lastError: any = null;
 
     for (const modelName of candidateModels) {
-      try {
-        console.log(`[Slip2Excel] Attempting OCR with model: ${modelName}`);
-        response = await ai.models.generateContent({
-          model: modelName,
-          contents: {
-            parts: [
-              {
-                inlineData: {
-                  data: cleanBase64,
-                  mimeType,
+      // Try each model with up to 2 attempts with exponential backoff on 503 / high demand
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          console.log(`[Slip2Excel] Attempting OCR with model: ${modelName} (attempt ${attempt})`);
+          response = await ai.models.generateContent({
+            model: modelName,
+            contents: {
+              parts: [
+                {
+                  inlineData: {
+                    data: cleanBase64,
+                    mimeType,
+                  },
                 },
-              },
-              {
-                text: promptText,
-              },
-            ],
-          },
-          config: {
-            thinkingConfig: {
-              thinkingBudget: 0,
+                {
+                  text: promptText,
+                },
+              ],
             },
-            temperature: 0.1,
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                detectedPrefix: {
-                  type: Type.STRING,
-                  description: 'Primary or combined prefixes detected (e.g. TSUT / PSUT)',
-                },
-                detectedBinNumber: {
-                  type: Type.STRING,
-                  description: 'List of bin numbers detected (e.g. 2162 / 2352 / 2342 / 2300)',
-                },
-                sections: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      sectionIndex: { type: Type.INTEGER },
-                      title: { type: Type.STRING },
-                      prefix: { type: Type.STRING },
-                      binNumber: { type: Type.STRING },
-                      rowCount: { type: Type.INTEGER },
-                      totalQty: { type: Type.INTEGER },
-                    },
-                    required: ['sectionIndex', 'prefix', 'binNumber'],
+            config: {
+              thinkingConfig: {
+                thinkingBudget: 0,
+              },
+              temperature: 0.1,
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  detectedPrefix: {
+                    type: Type.STRING,
+                    description: 'Primary or combined prefixes detected (e.g. TSUT / PSUT)',
                   },
-                },
-                rows: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      rowNumber: { type: Type.INTEGER },
-                      sectionIndex: { type: Type.INTEGER },
-                      sectionName: { type: Type.STRING },
-                      rawText: { type: Type.STRING },
-                      prefix: { type: Type.STRING },
-                      itemCode: { type: Type.STRING },
-                      fullCode: { type: Type.STRING },
-                      year: { type: Type.STRING },
-                      quantity: { type: Type.NUMBER },
-                      binNumber: { type: Type.STRING },
-                      isCarryForward: { type: Type.BOOLEAN },
-                      carryForwardFrom: { type: Type.STRING },
-                    },
-                    required: ['itemCode', 'year', 'quantity', 'isCarryForward', 'binNumber'],
+                  detectedBinNumber: {
+                    type: Type.STRING,
+                    description: 'List of bin numbers detected (e.g. 2162 / 2352 / 2342 / 2300)',
                   },
-                },
-                duplicateWarnings: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      itemCode: { type: Type.STRING },
-                      fullCode: { type: Type.STRING },
-                      year: { type: Type.STRING },
-                      rowIndices: {
-                        type: Type.ARRAY,
-                        items: { type: Type.INTEGER },
+                  sections: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        sectionIndex: { type: Type.INTEGER },
+                        title: { type: Type.STRING },
+                        prefix: { type: Type.STRING },
+                        binNumber: { type: Type.STRING },
+                        rowCount: { type: Type.INTEGER },
+                        totalQty: { type: Type.INTEGER },
                       },
-                      message: { type: Type.STRING },
+                      required: ['sectionIndex', 'prefix', 'binNumber'],
                     },
-                    required: ['itemCode', 'year', 'rowIndices', 'message'],
+                  },
+                  rows: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        rowNumber: { type: Type.INTEGER },
+                        sectionIndex: { type: Type.INTEGER },
+                        sectionName: { type: Type.STRING },
+                        rawText: { type: Type.STRING },
+                        prefix: { type: Type.STRING },
+                        itemCode: { type: Type.STRING },
+                        fullCode: { type: Type.STRING },
+                        year: { type: Type.STRING },
+                        quantity: { type: Type.NUMBER },
+                        binNumber: { type: Type.STRING },
+                        isCarryForward: { type: Type.BOOLEAN },
+                        carryForwardFrom: { type: Type.STRING },
+                      },
+                      required: ['itemCode', 'year', 'quantity', 'isCarryForward', 'binNumber'],
+                    },
+                  },
+                  duplicateWarnings: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        itemCode: { type: Type.STRING },
+                        fullCode: { type: Type.STRING },
+                        year: { type: Type.STRING },
+                        rowIndices: {
+                          type: Type.ARRAY,
+                          items: { type: Type.INTEGER },
+                        },
+                        message: { type: Type.STRING },
+                      },
+                      required: ['itemCode', 'year', 'rowIndices', 'message'],
+                    },
                   },
                 },
+                required: ['rows'],
               },
-              required: ['rows'],
             },
-          },
-        });
+          });
 
-        if (response && response.text) {
-          console.log(`[Slip2Excel] Successfully extracted data with ${modelName}`);
-          break;
+          if (response && response.text) {
+            console.log(`[Slip2Excel] Successfully extracted data with ${modelName}`);
+            break;
+          }
+        } catch (err: any) {
+          lastError = err;
+          const errMsg = err?.message || String(err);
+          console.warn(`[Slip2Excel] Model ${modelName} attempt ${attempt} failed:`, errMsg);
+
+          // If high demand or 503, wait briefly before retrying or switching
+          if (attempt < 2 && (errMsg.includes('high demand') || errMsg.includes('503') || errMsg.includes('UNAVAILABLE'))) {
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+          }
         }
-      } catch (err: any) {
-        lastError = err;
-        console.warn(`[Slip2Excel] Model ${modelName} failed, falling back to next model:`, err?.message || err);
+      }
+
+      if (response && response.text) {
+        break;
       }
     }
 

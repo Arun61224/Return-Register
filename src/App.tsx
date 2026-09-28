@@ -279,7 +279,19 @@ export default function App() {
       try {
         const compressedBase64 = await compressImageForUpload(file, 1200, 0.82);
         lastValidImage = compressedBase64;
-        const result = await extractSingleSlip(compressedBase64);
+        let result: any = null;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            result = await extractSingleSlip(compressedBase64);
+            if (result && result.rows) break;
+          } catch (slipErr: any) {
+            if (attempt === 1) {
+              await new Promise((r) => setTimeout(r, 2000));
+            } else {
+              throw slipErr;
+            }
+          }
+        }
 
         if (result.detectedPrefix) detectedPrefixes.add(result.detectedPrefix);
         if (result.detectedBinNumber) detectedBins.add(result.detectedBinNumber);
