@@ -1,3 +1,4 @@
+```tsx
 {/* Product Code */}
 <td className="py-2.5 px-3">
   <div className="flex items-center gap-1.5 font-mono">
@@ -42,3 +43,4 @@
     </span>
   </div>
 </td>
+```
