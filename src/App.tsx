@@ -1,3 +1,4 @@
+```tsx
 {/* Product Code */}
 <td className="py-2.5 px-3">
   <div className="flex items-center gap-1.5 font-mono">
@@ -11,9 +12,9 @@
       {(row.fullCode || `${row.prefix}-${row.itemCode}`) +
         '--' +
         (row.year
-          ? `${String(row.year)
-              .replace(/[\s\-_]*(years?|months?)$/i, '')
-              .trim()}${currentUnit === 'months' ? 'months' : 'years'}`
+          ? `${row.year.replace(/[\s\-_]*(years?|months?)$/i, '').trim()}${
+              currentUnit === 'months' ? 'months' : 'years'
+            }`
           : currentUnit === 'months'
             ? 'months'
             : 'years')}
@@ -28,7 +29,7 @@
       <input
         type="text"
         title="Edit Year / Age"
-        value={row.year || ''}
+        value={row.year}
         onChange={(e) =>
           updateRowField(row.id, 'year', e.target.value)
         }
@@ -42,3 +43,4 @@
     </span>
   </div>
 </td>
+```
