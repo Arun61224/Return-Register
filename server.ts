@@ -985,8 +985,8 @@ async function startServer() {
     });
   }
 
-  app.listen(port, () => {
-    console.log(`Slip2Excel server listening on port ${port}`);
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`Slip2Excel server listening on http://0.0.0.0:${port}`);
   });
 }
 
