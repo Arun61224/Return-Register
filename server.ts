@@ -16,34 +16,78 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 /**
+ * Automatically separates year/age range and quantity if trailing quantity was included in year
+ * e.g. "2-3-2" -> year: "2-3", quantity: 2
+ * "12-18-1" -> year: "12-18", quantity: 1
+ * "4-5-2years" -> year: "4-5", quantity: 2
+ */
+function parseYearAndQuantity(rawYear: string, existingQty: number = 1): { year: string; quantity: number } {
+  if (!rawYear) return { year: '', quantity: existingQty || 1 };
+
+  const clean = rawYear.replace(/[\s\-_]*(years?|months?)$/i, '').trim();
+
+  // If clean is "2-3-2", "4-5-1", "12-18-2", "697-2-3-2", etc.
+  const parts = clean.split(/[\s\-_]+/).filter(Boolean);
+  if (parts.length >= 3) {
+    const lastPart = parts[parts.length - 1];
+    // If the last part is a single or small number (likely quantity: 1, 2, 3, etc.)
+    if (/^\d+$/.test(lastPart)) {
+      const qty = parseInt(lastPart, 10);
+      const ageParts = parts.slice(0, parts.length - 1);
+      // If more than 2 parts remain, take the last 2 for age range
+      let yearParts = ageParts;
+      if (ageParts.length > 2) {
+        yearParts = ageParts.slice(-2);
+      }
+      return {
+        year: yearParts.join('-'),
+        quantity: !isNaN(qty) && qty > 0 ? qty : existingQty || 1,
+      };
+    }
+  }
+
+  return {
+    year: clean,
+    quantity: existingQty || 1,
+  };
+}
+
+/**
  * Determines whether size is 'months' or 'years'
  * Months: 0-3, 3-6, 6-9, 9-12, 6-12, 12-18, 18-24
  * Years: 1-2, 2-3, 3-4, 4-5, 5-6, 6-7, 7-8, 8-9, 9-10, 11-12, 13-14, 15-16
  */
 function getAgeUnit(range: string): 'months' | 'years' {
   if (!range) return 'years';
-  const clean = range.trim().toLowerCase().replace(/\s+/g, '');
-  const months = new Set(['0-3', '3-6', '6-9', '9-12', '6-12', '12-18', '18-24']);
-  if (months.has(clean)) return 'months';
+  const { year } = parseYearAndQuantity(range, 1);
+  const clean = year.trim().toLowerCase().replace(/\s+/g, '');
+  const months = new Set([
+    '0-3', '3-6', '6-9', '9-12', '6-12', '12-18', '18-24',
+    '0/3', '3/6', '6/9', '9/12', '6/12', '12/18', '18/24'
+  ]);
+  if (months.has(clean) || /^(0-3|3-6|6-9|9-12|6-12|12-18|18-24)(m|months?)?$/i.test(clean)) {
+    return 'months';
+  }
   return 'years';
 }
 
 /**
  * Normalizes prefixes including:
- * - TS / T-S / Tshrt -> Tshrt
+ * - TS / T-S / Tshrt / 1shrt / lshrt / Ishrt -> Tshrt
  * - TSUT
  * - PSUT
+ * - NSUT
  * - YKTs / YKT/s (meaning YK Tshrt / YK T-shirt)
  */
 function normalizePrefix(raw: string): string {
   if (!raw) return 'TSUT';
   const clean = raw.trim();
-  // Match TS, T-S, T/S, Tshrt, T-shrt, T-shirt (alone as prefix)
-  if (/^(ts|t[\s\/\-_]s|tshrt|t[\s\-_]?sh[ir]*t)$/i.test(clean)) {
+  // Match TS, T-S, T/S, Tshrt, T-shrt, T-shirt, 1shrt, lshrt, Ishrt, |shrt (alone as prefix)
+  if (/^(ts|t[\s\/\-_]s|[t1li|][\s\-_]?sh[ir]*t|tshirt)$/i.test(clean)) {
     return 'Tshrt';
   }
-  // Match YKTs, YKT/s, YKT/S, YKTS, YK Tshrt, YK T-shirt
-  if (/^ykt[\s\/\-_]?s?$/i.test(clean) || /yk\s*t[\s\-_]?sh[ir]*t/i.test(clean)) {
+  // Match YKTs, YKT/s, YKT/S, YKTS, YK Tshrt, YK T-shirt, YK 1shrt
+  if (/^ykt[\s\/\-_]?s?$/i.test(clean) || /yk\s*[t1li|][\s\-_]?sh[ir]*t/i.test(clean)) {
     return 'YKTs';
   }
   // Match YK NSUT, YK-NSUT, YKNSUT
@@ -343,8 +387,17 @@ function findBestSkuMatches(
   let garmentBase = prefixLower.replace(/^yk[\s\/\-_]?/i, '').trim();
   const possiblePrefixes: string[] = [];
 
-  if (garmentBase === 'ts' || garmentBase === 'tshrt' || garmentBase === 't' || prefixLower === 'ykts') {
-    possiblePrefixes.push('tshrt', 'ts');
+  if (
+    garmentBase === 'ts' ||
+    garmentBase === 'tshrt' ||
+    garmentBase === 't' ||
+    garmentBase === '1shrt' ||
+    garmentBase === 'lshrt' ||
+    garmentBase === 'ishrt' ||
+    garmentBase === 'tshirt' ||
+    prefixLower === 'ykts'
+  ) {
+    possiblePrefixes.push('tshrt', 'ts', 'tshirt');
   } else if (garmentBase === 'tsut') {
     possiblePrefixes.push('tsut');
   } else if (garmentBase === 'psut') {
@@ -480,6 +533,19 @@ function findBestSkuMatches(
   // 1. Try EXACT year match first
   let matches = executeSearch(cleanYear, isMonths);
 
+  // If multiple candidates exist, prioritize and filter to match the garment type (e.g. Tshrt vs PSUT/NSUT/HOD)
+  if (possiblePrefixes.length > 0 && matches.length > 0) {
+    const garmentMatches = matches.filter((m) => {
+      const lower = m.toLowerCase();
+      return possiblePrefixes.some((p) =>
+        lower.includes(`-${p}-`) || lower.includes(`-${p}--`) || lower.startsWith(`${p}-`)
+      );
+    });
+    if (garmentMatches.length > 0) {
+      matches = garmentMatches;
+    }
+  }
+
   if (matches.length > 0) {
     if (matches.length === 1) {
       return { matchedSku: matches[0], candidates: matches, status: 'matched' };
@@ -507,7 +573,18 @@ function findBestSkuMatches(
       altAge === '3-6' ||
       altAge === '0-3';
     const cleanAlt = altAge.replace(/[\s\-_]*(years?|months?)$/i, '').trim();
-    const altMatches = executeSearch(cleanAlt, isAltMonths);
+    let altMatches = executeSearch(cleanAlt, isAltMonths);
+    if (possiblePrefixes.length > 0 && altMatches.length > 0) {
+      const garmentMatches = altMatches.filter((m) => {
+        const lower = m.toLowerCase();
+        return possiblePrefixes.some((p) =>
+          lower.includes(`-${p}-`) || lower.includes(`-${p}--`) || lower.startsWith(`${p}-`)
+        );
+      });
+      if (garmentMatches.length > 0) {
+        altMatches = garmentMatches;
+      }
+    }
     if (altMatches.length > 0) {
       const preferredMatch = hasYkPattern
         ? altMatches.find((m) => m.toUpperCase().startsWith('KYK-') || m.toUpperCase().startsWith('DYK-'))
@@ -615,42 +692,57 @@ CRITICAL RULES:
      c) Its bin number enclosed in a bracket/box at the bottom of THAT SPECIFIC column (e.g. [2162], [2352], [2342], [2300]).
 
 2. CRITICAL PREFIX DETECTION RULES:
-   Prefixes written at the top of a column/section or before item numbers indicate garment/part type:
-   - "TS" or "T-S" or "Tshrt" -> Normalize strictly to "Tshrt" (Whenever you see "TS", output prefix as "Tshrt")
+   Prefixes written at the top of a column/section, or in the left margin or header indicate garment/part type:
+   - "Tshrt" / "tshrt" / "1shrt" / "lshrt" / "Ishrt" / "TS" / "T-S" / "T-shirt":
+     * Handwritten "Tshrt" often has a vertical stroke resembling "1shrt", "lshrt", or "Ishrt" in the left margin!
+     * ALWAYS recognize and normalize this strictly to "Tshrt" (garment: T-shirt).
+     * Output prefix as "Tshrt", and fullCode as "Tshrt-<itemCode>".
    - "TSUT" (T-Shirt Suit / T-Suit)
    - "PSUT" (Pant Suit)
    - "NSUT" (Night Suit)
    - "YKTs" or "YKT/s" (stands for "YK Tshrt" / YK T-shirt)
      * NOTE: When you see "YKTs", "YKT/s", "YKT/S", "YKTS", or "YK Tshrt", recognize it as the prefix "YKTs".
      * Do NOT confuse "YKT/s" with a date or fraction; it is the garment prefix for YK Tshrt!
-     * Output prefix as "YKTs", and fullCode as "YKTs-<itemCode>" (e.g. YKTs-126).
+     * Output prefix as "YKTs", and fullCode as "YKTs-<itemCode>" (e.g. YKTs-697).
    - "YK NSUT" or "YK-NSUT" or "YKNSUT" -> Output prefix as "YK NSUT".
    - "YK PSUT" or "YK-PSUT" or "YKPSUT" -> Output prefix as "YK PSUT".
    - "YK TSUT" or "YK-TSUT" or "YKTSUT" -> Output prefix as "YK TSUT".
 
-3. CARRY-FORWARD BLANK RULE (LOCAL TO EACH SECTION):
+3. QUANTITY VS AGE/YEAR DISCRIMINATION RULE:
+   - In warehouse inventory slips, every line follows:
+     [Item Code] - [Age Range] - [Quantity]
+     (or "- [Age Range] - [Quantity]" if item code is inherited)
+   - The LAST number on each line is ALWAYS the Quantity!
+   - Examples:
+     * "697 - 2 - 3 - 2" -> Item Code: "697", Year: "2-3", Quantity: 2 (CRITICAL: Do NOT output year as "2-3-2"! The last 2 is quantity!)
+     * "- 2 - 3 - 2" -> Year: "2-3", Quantity: 2
+     * "232 - 13 - 14 - 1" -> Item Code: "232", Year: "13-14", Quantity: 1
+     * "541 - 6 - 12 - 1" -> Item Code: "541", Year: "6-12", Quantity: 1
+   - Never put 3 numbers in the year field (e.g. "2-3-2" is invalid; split into year: "2-3", quantity: 2).
+
+4. CARRY-FORWARD BLANK RULE (LOCAL TO EACH SECTION):
    - When an item code is omitted/blank at the start of a line (e.g. "- 4 - 5 - 1" or "- 11 - 12 - 2"):
    - INHERIT the item code from the line immediately above it within the SAME section!
    - Mark isCarryForward = true, and carryForwardFrom = the inherited code.
 
-4. ROW FIELDS:
-   - Prefix: Section prefix (e.g. TSUT, PSUT, or YKTs)
-   - Item Code: e.g. 126, 223, 170, 169
-   - Full Code: PREFIX-ITEMCODE (e.g. TSUT-126, PSUT-223, YKTs-126)
-   - Year: The dash-separated year range e.g. "11-12", "6-7", "6-12", "18-24", "4-5"
+5. ROW FIELDS:
+   - Prefix: Section prefix (e.g. Tshrt, TSUT, PSUT, or YKTs)
+   - Item Code: e.g. 126, 223, 170, 169, 697
+   - Full Code: PREFIX-ITEMCODE (e.g. Tshrt-232, TSUT-126, PSUT-223, YKTs-697)
+   - Year: The dash-separated year range e.g. "11-12", "6-7", "6-12", "18-24", "4-5", "2-3"
    - Quantity: The last number in the line (e.g. 1, 2)
    - Bin Number: The bin number for THIS section (e.g. 2162 for Section 1, 2352 for Section 2, etc.)
    - Section Index: 1, 2, 3, or 4
 
-5. DO NOT MERGE DUPLICATES:
+6. DO NOT MERGE DUPLICATES:
    - Every single line written on paper must be an individual row in the output array. Keep all duplicate lines as separate rows!
 
 Extract all rows from all sections systematically. Return strictly JSON matching the response schema.
 `;
 
-    // Primary fast & reliable model: gemini-3.1-flash-lite
-    // Fallbacks: gemini-flash-latest, gemini-3.8-flash
+    // Primary fast & reliable models
     const candidateModels = [
+      'gemini-2.5-flash',
       'gemini-3.1-flash-lite',
       'gemini-flash-latest',
       'gemini-3.8-flash',
@@ -799,7 +891,10 @@ Extract all rows from all sections systematically. Return strictly JSON matching
         }
 
         const fullCode = `${normalizedPrefix}-${cleanItemCode}`;
-        const yearStr = String(row.year || '');
+        const rawQty = typeof row.quantity === 'number' ? row.quantity : parseInt(row.quantity, 10) || 1;
+        const parsedYearQty = parseYearAndQuantity(String(row.year || ''), rawQty);
+        const yearStr = parsedYearQty.year;
+        const finalQuantity = rawQty > 1 ? rawQty : parsedYearQty.quantity;
         const ageUnit = getAgeUnit(yearStr);
 
         // Find matches in Master Sheet
@@ -823,7 +918,7 @@ Extract all rows from all sections systematically. Return strictly JSON matching
           fullCode,
           year: yearStr,
           ageType: ageUnit,
-          quantity: typeof row.quantity === 'number' ? row.quantity : parseInt(row.quantity, 10) || 1,
+          quantity: finalQuantity,
           binNumber: String(row.binNumber || ''),
           isCarryForward: Boolean(row.isCarryForward),
           carryForwardFrom: row.carryForwardFrom || '',

@@ -25,7 +25,7 @@ import {
 
 import { InventoryRow, DuplicateWarning, SlipExtractionResult, SectionSummary } from './types/inventory';
 import { exportToExcel, copyForExcelClipboard, downloadCSV } from './utils/excelExport';
-import { getAgeUnit } from './utils/ageClassifier';
+import { getAgeUnit, parseYearAndQuantity } from './utils/ageClassifier';
 import { normalizePrefix } from './utils/prefixClassifier';
 import { compressImageForUpload } from './utils/imageCompressor';
 import { CameraCapture } from './components/CameraCapture';
@@ -298,8 +298,10 @@ export default function App() {
 
         // Format and append rows with unique IDs and continuous row numbering
         const startingRowNum = combinedRows.length;
-        const slipRows: InventoryRow[] = (result.rows || []).map((row, idx) => {
-          const yearStr = String(row.year || '');
+        const slipRows: InventoryRow[] = (result.rows || []).map((row: any, idx: number) => {
+          const parsedYearQty = parseYearAndQuantity(String(row.year || ''), Number(row.quantity) || 1);
+          const yearStr = parsedYearQty.year;
+          const quantity = Number(row.quantity) > 1 ? Number(row.quantity) : parsedYearQty.quantity;
           const rowNumber = startingRowNum + idx + 1;
           return {
             id: `batch-${i + 1}-${Date.now()}-${idx + 1}`,
@@ -312,7 +314,7 @@ export default function App() {
             fullCode: row.fullCode || `${row.prefix || 'TSUT'}-${row.itemCode}`,
             year: yearStr,
             ageType: row.ageType || getAgeUnit(yearStr),
-            quantity: Number(row.quantity) || 1,
+            quantity,
             binNumber: String(row.binNumber || ''),
             isCarryForward: Boolean(row.isCarryForward),
             carryForwardFrom: row.carryForwardFrom || '',
@@ -328,7 +330,7 @@ export default function App() {
 
         // Collect sections
         if (result.sections) {
-          result.sections.forEach((sec) => {
+          result.sections.forEach((sec: any) => {
             combinedSections.push({
               ...sec,
               title: `Slip ${i + 1} - ${sec.title}`,
@@ -373,7 +375,9 @@ export default function App() {
 
     const baseRowNumber = append ? rows.length : 0;
     const formattedRows: InventoryRow[] = (data.rows || []).map((row, idx) => {
-      const yearStr = String(row.year || '');
+      const parsedYearQty = parseYearAndQuantity(String(row.year || ''), Number(row.quantity) || 1);
+      const yearStr = parsedYearQty.year;
+      const quantity = Number(row.quantity) > 1 ? Number(row.quantity) : parsedYearQty.quantity;
       return {
         id: row.id || `row-${Date.now()}-${baseRowNumber + idx + 1}`,
         rowNumber: baseRowNumber + idx + 1,
@@ -385,7 +389,7 @@ export default function App() {
         fullCode: row.fullCode || `${row.prefix || 'TSUT'}-${row.itemCode}`,
         year: yearStr,
         ageType: row.ageType || getAgeUnit(yearStr),
-        quantity: Number(row.quantity) || 1,
+        quantity,
         binNumber: String(row.binNumber || ''),
         isCarryForward: Boolean(row.isCarryForward),
         carryForwardFrom: row.carryForwardFrom || '',
@@ -479,7 +483,12 @@ export default function App() {
             newRow.fullCode = `${newRow.prefix}-${newRow.itemCode}`;
           }
           if (field === 'year') {
-            newRow.ageType = getAgeUnit(value);
+            const parsed = parseYearAndQuantity(String(value || ''), r.quantity);
+            newRow.year = parsed.year;
+            if (parsed.quantity > 1) {
+              newRow.quantity = parsed.quantity;
+            }
+            newRow.ageType = getAgeUnit(parsed.year);
           }
           return newRow;
         }
@@ -1267,55 +1276,33 @@ export default function App() {
 
                         {/* Product Code* (Auto-Matched with Google Sheet Master SKU) */}
                         <td className="py-2.5 px-3">
-                          <div className="flex flex-col gap-1 font-mono">
-                            <div className="flex items-center gap-1.5">
-                              <span className={`font-bold text-xs whitespace-nowrap px-1.5 py-0.5 rounded border ${
-                                row.matchedSku
-                                  ? isDarkMode
-                                    ? 'text-emerald-300 bg-emerald-950/60 border-emerald-600/60'
-                                    : 'text-emerald-900 bg-emerald-100/80 border-emerald-300 font-extrabold'
-                                  : isDarkMode
-                                    ? 'text-emerald-400 bg-emerald-950/30 border-emerald-800/40'
-                                    : 'text-emerald-800 bg-emerald-50 border-emerald-200/80'
-                              }`}>
-                                {row.matchedSku || (row.fullCode || `${row.prefix}-${row.itemCode}`) + '--' + (row.year ? `${row.year.replace(/[\s\-_]*(years?|months?)$/i, '').trim()}${currentUnit === 'months' ? 'months' : 'years'}` : currentUnit === 'months' ? 'months' : 'years')}
-                              </span>
-                              <span className={`text-[10px] font-normal ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                                (
-                                <input
-                                  type="text"
-                                  title="Edit Year / Age"
-                                  value={row.year}
-                                  onChange={(e) => updateRowField(row.id, 'year', e.target.value)}
-                                  className={`w-10 px-1 py-0.5 rounded border text-center font-mono focus:outline-none ${
-                                    isDarkMode
-                                      ? 'bg-slate-950 border-slate-700 text-sky-300 focus:border-emerald-500'
-                                      : 'bg-white border-slate-300 text-slate-800 focus:border-emerald-600'
-                                  }`}
-                                />
-                                )
-                              </span>
-                            </div>
-
-                            {/* Dropdown if multiple Master SKU candidates exist in Google Sheet */}
-                            {row.skuCandidates && row.skuCandidates.length > 1 && (
-                              <select
-                                value={row.matchedSku || ''}
-                                onChange={(e) => updateRowField(row.id, 'matchedSku', e.target.value)}
-                                className={`text-[10px] px-1 py-0.5 rounded border font-mono truncate max-w-[240px] focus:outline-none ${
+                          <div className="flex items-center gap-1.5 font-mono">
+                            <span className={`font-bold text-xs whitespace-nowrap px-1.5 py-0.5 rounded border ${
+                              row.matchedSku
+                                ? isDarkMode
+                                  ? 'text-emerald-300 bg-emerald-950/60 border-emerald-600/60'
+                                  : 'text-emerald-900 bg-emerald-100/80 border-emerald-300 font-extrabold'
+                                : isDarkMode
+                                  ? 'text-emerald-400 bg-emerald-950/30 border-emerald-800/40'
+                                  : 'text-emerald-800 bg-emerald-50 border-emerald-200/80'
+                            }`}>
+                              {row.matchedSku || (row.fullCode || `${row.prefix}-${row.itemCode}`) + '--' + (row.year ? `${row.year.replace(/[\s\-_]*(years?|months?)$/i, '').trim()}${currentUnit === 'months' ? 'months' : 'years'}` : currentUnit === 'months' ? 'months' : 'years')}
+                            </span>
+                            <span className={`text-[10px] font-normal ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                              (
+                              <input
+                                type="text"
+                                title="Edit Year / Age"
+                                value={row.year}
+                                onChange={(e) => updateRowField(row.id, 'year', e.target.value)}
+                                className={`w-10 px-1 py-0.5 rounded border text-center font-mono focus:outline-none ${
                                   isDarkMode
-                                    ? 'bg-slate-950 border-slate-700 text-slate-300'
-                                    : 'bg-slate-50 border-slate-300 text-slate-700'
+                                    ? 'bg-slate-950 border-slate-700 text-sky-300 focus:border-emerald-500'
+                                    : 'bg-white border-slate-300 text-slate-800 focus:border-emerald-600'
                                 }`}
-                                title="Multiple brands found in Google Sheet. Click to select brand."
-                              >
-                                {row.skuCandidates.map((cand) => (
-                                  <option key={cand} value={cand}>
-                                    {cand}
-                                  </option>
-                                ))}
-                              </select>
-                            )}
+                              />
+                              )
+                            </span>
                           </div>
                         </td>
 

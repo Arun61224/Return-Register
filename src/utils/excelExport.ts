@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import { InventoryRow } from '../types/inventory';
-import { getAgeUnit } from './ageClassifier';
+import { getAgeUnit, parseYearAndQuantity } from './ageClassifier';
 
 /**
  * Creates a formatted worksheet from rows.
@@ -212,7 +212,8 @@ export function formatProductCodeWithUnit(row: InventoryRow): string {
 
   const prefix = row.prefix || 'TSUT';
   const itemCode = row.itemCode || '';
-  const rawYear = String(row.year || '').trim();
+  const parsed = parseYearAndQuantity(String(row.year || ''), row.quantity || 1);
+  const rawYear = parsed.year;
   const unit = (row.ageType || getAgeUnit(rawYear)).toLowerCase();
   const unitSuffix = unit === 'months' ? 'months' : 'years';
 
@@ -248,8 +249,9 @@ export function downloadCSV(rows: InventoryRow[], filename: string = 'inventory_
   ];
 
   const lines = rows.map((r) => {
+    const parsed = parseYearAndQuantity(String(r.year || ''), Number(r.quantity) || 1);
     const productCode = formatProductCodeWithUnit(r);
-    const quantity = Number(r.quantity) || 1;
+    const quantity = Number(r.quantity) > 1 ? Number(r.quantity) : parsed.quantity;
     const shelfCode = formatShelfCode(r.binNumber);
     const adjustmentType = 'Add';
     const inventoryType = '';
