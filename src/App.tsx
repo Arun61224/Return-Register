@@ -598,19 +598,33 @@ export default function App() {
     );
   };
 
+  // Google Sheet me match mila to wahi SKU, warna handwritten value (same format jo table me dikhta hai)
+  const getFinalSku = (row: InventoryRow): string => {
+    if (row.matchedSku) return row.matchedSku;
+    const unit = row.ageType || getAgeUnit(row.year);
+    const unitStr = unit === 'months' ? 'months' : 'years';
+    const base = row.fullCode || `${row.prefix}-${row.itemCode}`;
+    const cleanYear = row.year ? row.year.replace(/[\s\-_]*(years?|months?)$/i, '').trim() : '';
+    return `${base}--${cleanYear}${unitStr}`;
+  };
+
+  // Export ke liye rows: unmatched rows me handwritten value matchedSku me daal do
+  const withFinalSku = (list: InventoryRow[]): InventoryRow[] =>
+    list.map((r) => ({ ...r, matchedSku: getFinalSku(r) }));
+
   // Export handlers
   const handleExportExcel = () => {
     const rowsToExport = selectedSectionFilter === 'all'
       ? rows
       : rows.filter((r) => r.sectionIndex === selectedSectionFilter);
-    exportToExcel(rowsToExport, 'TSUT', '2162');
+    exportToExcel(withFinalSku(rowsToExport), 'TSUT', '2162');
   };
 
   const handleCopyClipboard = async () => {
     const rowsToCopy = selectedSectionFilter === 'all'
       ? rows
       : rows.filter((r) => r.sectionIndex === selectedSectionFilter);
-    const success = await copyForExcelClipboard(rowsToCopy);
+    const success = await copyForExcelClipboard(withFinalSku(rowsToCopy));
     if (success) {
       setCopySuccess(true);
       setTimeout(() => setCopySuccess(false), 2200);
@@ -621,7 +635,7 @@ export default function App() {
     const rowsToCsv = selectedSectionFilter === 'all'
       ? rows
       : rows.filter((r) => r.sectionIndex === selectedSectionFilter);
-    downloadCSV(rowsToCsv, `Stock_Slip_${selectedSectionFilter === 'all' ? 'All_Sections' : `Sec_${selectedSectionFilter}`}.csv`);
+    downloadCSV(withFinalSku(rowsToCsv), `Stock_Slip_${selectedSectionFilter === 'all' ? 'All_Sections' : `Sec_${selectedSectionFilter}`}.csv`);
   };
 
   // Filter rows by section and search query
